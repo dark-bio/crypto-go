@@ -10,6 +10,7 @@
 package rsa
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -85,6 +86,17 @@ func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	rsaKey, ok := key.(*rsa.PrivateKey)
 	if !ok {
 		return nil, errors.New("rsa: not an RSA private key")
+	}
+	// Go's ASN1 parser permits unused trailing bytes, which may end up with a
+	// weird interplay with the optional RSA CRT parameters (junk ignored). We
+	// don't want to allow that, so just round trip the format and see if it's
+	// matching or not.
+	recoded, err := x509.MarshalPKCS8PrivateKey(rsaKey)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(recoded, der) {
+		return nil, errors.New("rsa: non-canonical DER encoding")
 	}
 	return &SecretKey{inner: rsaKey}, nil
 }
