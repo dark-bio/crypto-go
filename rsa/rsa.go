@@ -61,6 +61,10 @@ func ParseSecretKey(b [SecretKeySize]byte) (*SecretKey, error) {
 
 	n := new(big.Int).Mul(p, q)
 
+	// The modulus must be exactly 2048 bits
+	if n.BitLen() != 2048 {
+		return nil, errors.New("rsa: modulus must be 2048 bits")
+	}
 	// Whilst the RSA algorithm permits different exponents, every modern
 	// system only ever uses 65537 and most also enforce this. Might as
 	// well do the same.
@@ -93,6 +97,14 @@ func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	rsaKey, ok := key.(*rsa.PrivateKey)
 	if !ok {
 		return nil, errors.New("rsa: not an RSA private key")
+	}
+	// The modulus must be exactly 2048 bits
+	if rsaKey.N.BitLen() != 2048 {
+		return nil, errors.New("rsa: modulus must be 2048 bits")
+	}
+	// The modulus must be odd (product of two odd primes)
+	if rsaKey.N.Bit(0) == 0 {
+		return nil, errors.New("rsa: modulus must be odd")
 	}
 	// Whilst the RSA algorithm permits different exponents, every modern
 	// system only ever uses 65537 and most also enforce this. Might as
@@ -215,8 +227,13 @@ func ParsePublicKey(b [PublicKeySize]byte) (*PublicKey, error) {
 	if n.Sign() <= 0 {
 		return nil, errors.New("rsa: invalid modulus")
 	}
+	// The modulus must be exactly 2048 bits
+	if n.BitLen() != 2048 {
+		return nil, errors.New("rsa: modulus must be 2048 bits")
+	}
+	// The modulus must be odd (product of two odd primes)
 	if n.Bit(0) == 0 {
-		return nil, errors.New("rsa: modulus is even")
+		return nil, errors.New("rsa: modulus must be odd")
 	}
 	// Whilst the RSA algorithm permits different exponents, every modern
 	// system only ever uses 65537 and most also enforce this. Might as
@@ -241,6 +258,14 @@ func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	rsaKey, ok := key.(*rsa.PublicKey)
 	if !ok {
 		return nil, errors.New("rsa: not an RSA public key")
+	}
+	// The modulus must be exactly 2048 bits
+	if rsaKey.N.BitLen() != 2048 {
+		return nil, errors.New("rsa: modulus must be 2048 bits")
+	}
+	// The modulus must be odd (product of two odd primes)
+	if rsaKey.N.Bit(0) == 0 {
+		return nil, errors.New("rsa: modulus must be odd")
 	}
 	// Whilst the RSA algorithm permits different exponents, every modern
 	// system only ever uses 65537 and most also enforce this. Might as
