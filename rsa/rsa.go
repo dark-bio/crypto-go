@@ -52,7 +52,7 @@ func GenerateKey() *SecretKey {
 //
 // Format: p (128 bytes) || q (128 bytes) || d (256 bytes) || e (8 bytes),
 // all in big-endian.
-func ParseSecretKey(b [SecretKeySize]byte) *SecretKey {
+func ParseSecretKey(b [SecretKeySize]byte) (*SecretKey, error) {
 	p := new(big.Int).SetBytes(b[0:128])
 	q := new(big.Int).SetBytes(b[128:256])
 	d := new(big.Int).SetBytes(b[256:512])
@@ -68,9 +68,12 @@ func ParseSecretKey(b [SecretKeySize]byte) *SecretKey {
 		D:      d,
 		Primes: []*big.Int{p, q},
 	}
+	if err := key.Validate(); err != nil {
+		return nil, err
+	}
 	key.Precompute()
 
-	return &SecretKey{inner: key}
+	return &SecretKey{inner: key}, nil
 }
 
 // ParseSecretKeyDER parses a PKCS#8 DER-encoded private key.
@@ -179,16 +182,26 @@ type PublicKey struct {
 // ParsePublicKey parses a 264-byte array into a public key.
 //
 // Format: n (256 bytes) || e (8 bytes), all in big-endian.
-func ParsePublicKey(b [PublicKeySize]byte) *PublicKey {
+func ParsePublicKey(b [PublicKeySize]byte) (*PublicKey, error) {
 	n := new(big.Int).SetBytes(b[0:256])
 	e := new(big.Int).SetBytes(b[256:264])
 
+	// Validate that modulus and exponent are valid
+	if n.Sign() <= 0 {
+		return nil, errors.New("rsa: invalid modulus")
+	}
+	if n.Bit(0) == 0 {
+		return nil, errors.New("rsa: modulus is even")
+	}
+	if e.Sign() <= 0 || e.Cmp(big.NewInt(1)) == 0 {
+		return nil, errors.New("rsa: invalid exponent")
+	}
 	return &PublicKey{
 		inner: &rsa.PublicKey{
 			N: n,
 			E: int(e.Int64()),
 		},
-	}
+	}, nil
 }
 
 // ParsePublicKeyDER parses a PKIX DER-encoded public key.

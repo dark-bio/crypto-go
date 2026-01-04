@@ -49,10 +49,13 @@ func TestSecretKeyBytesCodec(t *testing.T) {
 	var b [SecretKeySize]byte
 	copy(b[:], inputBytes)
 
-	key := ParseSecretKey(b)
+	key, err := ParseSecretKey(b)
+	if err != nil {
+		t.Fatalf("failed to parse key: %v", err)
+	}
 	m := key.Marshal()
 	if got := hex.EncodeToString(m[:]); got != input {
-		t.Errorf("Marshal() = %s, want %s", got, input)
+		t.Errorf("encoded key mismatch: have %s, want %s", got, input)
 	}
 }
 
@@ -81,10 +84,13 @@ func TestPublicKeyBytesCodec(t *testing.T) {
 	var b [PublicKeySize]byte
 	copy(b[:], inputBytes)
 
-	key := ParsePublicKey(b)
+	key, err := ParsePublicKey(b)
+	if err != nil {
+		t.Fatalf("failed to parse key: %v", err)
+	}
 	m := key.Marshal()
 	if got := hex.EncodeToString(m[:]); got != input {
-		t.Errorf("Marshal() = %s, want %s", got, input)
+		t.Errorf("encoded key mismatch: have %s, want %s", got, input)
 	}
 }
 
@@ -126,10 +132,10 @@ JJXbL24vf1AajzeJk6CpdQ==
 
 	key, err := ParseSecretKeyPEM(input)
 	if err != nil {
-		t.Fatalf("ParseSecretKeyPEM() error = %v", err)
+		t.Fatalf("failed to parse key: %v", err)
 	}
 	if got := strings.TrimSpace(key.MarshalPEM()); got != strings.TrimSpace(input) {
-		t.Errorf("MarshalPEM() mismatch")
+		t.Errorf("encoded key mismatch: have %s, want %s", got, strings.TrimSpace(input))
 	}
 }
 
@@ -152,10 +158,10 @@ fQIDAQAB
 
 	key, err := ParsePublicKeyPEM(input)
 	if err != nil {
-		t.Fatalf("ParsePublicKeyPEM() error = %v", err)
+		t.Fatalf("failed to parse key: %v", err)
 	}
 	if got := strings.TrimSpace(key.MarshalPEM()); got != strings.TrimSpace(input) {
-		t.Errorf("MarshalPEM() mismatch")
+		t.Errorf("encded key mismatch: have %s, want %s", got, strings.TrimSpace(input))
 	}
 }
 
@@ -212,10 +218,10 @@ func TestSecretKeyDERCodec(t *testing.T) {
 	der, _ := hex.DecodeString(input)
 	key, err := ParseSecretKeyDER(der)
 	if err != nil {
-		t.Fatalf("ParseSecretKeyDER() error = %v", err)
+		t.Fatalf("failed to parse key %v", err)
 	}
 	if got := hex.EncodeToString(key.MarshalDER()); got != input {
-		t.Errorf("MarshalDER() mismatch")
+		t.Errorf("encoded key mismatch: have %s, want %s", got, input)
 	}
 }
 
@@ -241,10 +247,10 @@ func TestPublicKeyDERCodec(t *testing.T) {
 	der, _ := hex.DecodeString(input)
 	key, err := ParsePublicKeyDER(der)
 	if err != nil {
-		t.Fatalf("ParsePublicKeyDER() error = %v", err)
+		t.Fatalf("failed to parse key: %v", err)
 	}
 	if got := hex.EncodeToString(key.MarshalDER()); got != input {
-		t.Errorf("MarshalDER() mismatch")
+		t.Errorf("encoded key mismatch: have %s, want %s", got, input)
 	}
 }
 
@@ -276,7 +282,7 @@ fQIDAQAB
 
 	fp := key.Fingerprint()
 	if got := hex.EncodeToString(fp[:]); got != want {
-		t.Errorf("Fingerprint() = %s, want %s", got, want)
+		t.Errorf("fingerprint mismatch: have %s, want %s", got, want)
 	}
 }
 
@@ -293,10 +299,9 @@ func TestSignVerify(t *testing.T) {
 	signature := secret.Sign(message)
 
 	if err := public.Verify(message, signature); err != nil {
-		t.Errorf("Verify() error = %v", err)
+		t.Errorf("failed to verify: %v", err)
 	}
-
 	if err := public.Verify([]byte("wrong message"), signature); err == nil {
-		t.Error("Verify() should fail with wrong message")
+		t.Error("verify succeeded")
 	}
 }
