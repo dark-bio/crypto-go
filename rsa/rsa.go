@@ -193,8 +193,11 @@ func ParsePublicKey(b [PublicKeySize]byte) (*PublicKey, error) {
 	if n.Bit(0) == 0 {
 		return nil, errors.New("rsa: modulus is even")
 	}
-	if e.Sign() <= 0 || e.Cmp(big.NewInt(1)) == 0 {
-		return nil, errors.New("rsa: invalid exponent")
+	// Whilst the RSA algorithm permits different exponents, every modern
+	// system only ever uses 65537 and most also enforce this. Might as
+	// well do the same.
+	if e.Cmp(big.NewInt(65537)) != 0 {
+		return nil, errors.New("rsa: exponent must be 65537")
 	}
 	return &PublicKey{
 		inner: &rsa.PublicKey{
