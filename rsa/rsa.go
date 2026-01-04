@@ -61,6 +61,13 @@ func ParseSecretKey(b [SecretKeySize]byte) (*SecretKey, error) {
 
 	n := new(big.Int).Mul(p, q)
 
+	// Whilst the RSA algorithm permits different exponents, every modern
+	// system only ever uses 65537 and most also enforce this. Might as
+	// well do the same.
+	if e.Cmp(big.NewInt(65537)) != 0 {
+		return nil, errors.New("rsa: exponent must be 65537")
+	}
+	// Construct the actual private key
 	key := &rsa.PrivateKey{
 		PublicKey: rsa.PublicKey{
 			N: n,
@@ -86,6 +93,12 @@ func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	rsaKey, ok := key.(*rsa.PrivateKey)
 	if !ok {
 		return nil, errors.New("rsa: not an RSA private key")
+	}
+	// Whilst the RSA algorithm permits different exponents, every modern
+	// system only ever uses 65537 and most also enforce this. Might as
+	// well do the same.
+	if rsaKey.E != 65537 {
+		return nil, errors.New("rsa: exponent must be 65537")
 	}
 	// Go's ASN1 parser permits unused trailing bytes, which may end up with a
 	// weird interplay with the optional RSA CRT parameters (junk ignored). We
@@ -228,6 +241,12 @@ func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	rsaKey, ok := key.(*rsa.PublicKey)
 	if !ok {
 		return nil, errors.New("rsa: not an RSA public key")
+	}
+	// Whilst the RSA algorithm permits different exponents, every modern
+	// system only ever uses 65537 and most also enforce this. Might as
+	// well do the same.
+	if rsaKey.E != 65537 {
+		return nil, errors.New("rsa: exponent must be 65537")
 	}
 	return &PublicKey{inner: rsaKey}, nil
 }
