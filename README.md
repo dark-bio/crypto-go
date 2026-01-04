@@ -26,3 +26,7 @@ This repository is parameter selection and lightweight wrapper around a number o
 - Serialization
   - **CBOR ([RFC-8949](https://datatracker.ietf.org/doc/html/rfc8949))**: restricted to `integer`, `text`, `bytes`, `array`, `map[int]`
   - **COSE ([RFC-8152](https://datatracker.ietf.org/doc/html/rfc8152))**: `COSE_Sign1`, `COSE_Encrypt0`
+
+## Siblings
+
+This is a sibling package with the Rust [`github.com/dark-bio/crypto-rs`](https://github.com/dark-bio/crypto-rs); as in, both repositories implement the same feature sets and API surfaces at the same version points. This naturally means PRs merged into one project necessarily have to have a counter-PR in the other project.
