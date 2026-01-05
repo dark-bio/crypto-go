@@ -88,9 +88,11 @@ func Decode(data []byte) (kind string, blob []byte, err error) {
 	}
 	body = body[:len(body)-len(lineEnding)]
 
-	// Strip line endings and decode
+	// Strip line endings and ensure no whitespace remains
 	b64 := bytes.ReplaceAll(body, lineEnding, nil)
-
+	if bytes.ContainsAny(b64, "\r\n") {
+		return "", nil, errors.New("pemext: invalid characters in base64 data")
+	}
 	decoded, err := base64.StdEncoding.Strict().DecodeString(string(b64))
 	if err != nil {
 		return "", nil, errors.New("pemext: invalid base64 encoding")
