@@ -10,6 +10,7 @@
 package xdsa
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -32,13 +33,9 @@ const (
 	// SignatureDomain is the signature label for ML-DSA-65-Ed25519-SHA512.
 	SignatureDomain = "COMPSIG-MLDSA65-Ed25519-SHA512"
 
-	// SecretKeySeedSize is the size of the secret key seed in bytes.
+	// SecretKeySize is the size of the secret key in bytes.
 	// Format: ML-DSA seed (32 bytes) || Ed25519 seed (32 bytes)
-	SecretKeySeedSize = 64
-
-	// SecretKeySize is the size of the expanded secret key in bytes.
-	// Format: ML-DSA expanded (4032 bytes) || Ed25519 seed (32 bytes)
-	SecretKeySize = 4064
+	SecretKeySize = 64
 
 	// PublicKeySize is the size of the public key in bytes.
 	// Format: ML-DSA (1952 bytes) || Ed25519 (32 bytes)
@@ -62,15 +59,15 @@ type SecretKey struct {
 
 // GenerateKey creates a new, random private key.
 func GenerateKey() *SecretKey {
-	var seed [SecretKeySeedSize]byte
+	var seed [SecretKeySize]byte
 	if _, err := rand.Read(seed[:]); err != nil {
 		panic("xdsa: " + err.Error())
 	}
-	return ParseSecretKeySeed(seed)
+	return ParseSecretKey(seed)
 }
 
-// ParseSecretKeySeed creates a private key from a 64-byte seed.
-func ParseSecretKeySeed(seed [SecretKeySeedSize]byte) *SecretKey {
+// ParseSecretKey creates a private key from a 64-byte seed.
+func ParseSecretKey(seed [SecretKeySize]byte) *SecretKey {
 	var mlSeed [mldsa65.SeedSize]byte
 	copy(mlSeed[:], seed[:32])
 
@@ -81,23 +78,6 @@ func ParseSecretKeySeed(seed [SecretKeySeedSize]byte) *SecretKey {
 		mlKey:  mlKey,
 		mlSeed: mlSeed,
 		edKey:  edKey,
-	}
-}
-
-// ParseSecretKey creates a private key from a 4064-byte expanded key.
-func ParseSecretKey(b [SecretKeySize]byte) *SecretKey {
-	var mlBytes [mldsa65.PrivateKeySize]byte
-	copy(mlBytes[:], b[:4032])
-
-	mlKey := new(mldsa65.PrivateKey)
-	if err := mlKey.UnmarshalBinary(mlBytes[:]); err != nil {
-		panic(err) // cannot fail
-	}
-	edKey := ed25519.NewKeyFromSeed(b[4032:])
-
-	return &SecretKey{
-		mlKey: mlKey,
-		edKey: edKey,
 	}
 }
 
@@ -119,9 +99,20 @@ func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	if len(info.PrivateKey) != 64 {
 		return nil, errors.New("xdsa: composite private key must be 64 bytes")
 	}
-	var seed [SecretKeySeedSize]byte
+	// Go's ASN1 parser permits unused trailing bytes (inside or outside). We
+	// don't want to allow that, so just round trip the format and see if it's
+	// matching or not.
+	recoded, err := asn1.Marshal(info)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(recoded, der) {
+		return nil, errors.New("xdsa: non-canonical DER encoding")
+	}
+	// Everything seems fine, instantiate the key
+	var seed [SecretKeySize]byte
 	copy(seed[:], info.PrivateKey)
-	return ParseSecretKeySeed(seed), nil
+	return ParseSecretKey(seed), nil
 }
 
 // MustParseSecretKeyDER parses a DER buffer into a private key.
@@ -158,29 +149,18 @@ func MustParseSecretKeyPEM(s string) *SecretKey {
 	return key
 }
 
-// MarshalSeed converts a secret key into a 64-byte seed.
-func (k *SecretKey) MarshalSeed() [SecretKeySeedSize]byte {
-	var out [SecretKeySeedSize]byte
-	copy(out[:32], k.mlSeed[:])
-	copy(out[32:], k.edKey.Seed())
-	return out
-}
-
-// Marshal converts a secret key into a 4064-byte array.
+// Marshal converts a secret key into a 64-byte array.
 func (k *SecretKey) Marshal() [SecretKeySize]byte {
 	var out [SecretKeySize]byte
-
-	mlBytes, _ := k.mlKey.MarshalBinary()
-	copy(out[:4032], mlBytes)
-	copy(out[4032:], k.edKey.Seed())
-
+	copy(out[:32], k.mlSeed[:])
+	copy(out[32:], k.edKey.Seed())
 	return out
 }
 
 // MarshalDER serializes a private key into a DER buffer.
 func (k *SecretKey) MarshalDER() []byte {
 	// The private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
-	seed := k.MarshalSeed()
+	seed := k.Marshal()
 
 	// Create the MLDSA65-Ed25519-SHA512 algorithm identifier; parameters
 	// MUST be absent
@@ -297,6 +277,17 @@ func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	if len(keyBytes) != PublicKeySize {
 		return nil, errors.New("xdsa: composite public key must be 1984 bytes")
 	}
+	// Go's ASN1 parser permits unused trailing bytes (inside or outside). We
+	// don't want to allow that, so just round trip the format and see if it's
+	// matching or not.
+	recoded, err := asn1.Marshal(info)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(recoded, der) {
+		return nil, errors.New("xdsa: non-canonical DER encoding")
+	}
+	// Everything seems fine, instantiate the key
 	var b [PublicKeySize]byte
 	copy(b[:], keyBytes)
 	return ParsePublicKey(b)

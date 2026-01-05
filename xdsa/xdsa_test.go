@@ -217,10 +217,10 @@ var ietfVectors = struct {
 // Tests operations with IETF test vectors.
 func TestIETFVectors(t *testing.T) {
 	seedBytes, _ := hex.DecodeString(ietfVectors.SecretKey)
-	var seed [SecretKeySeedSize]byte
+	var seed [SecretKeySize]byte
 	copy(seed[:], seedBytes)
 
-	seckey := ParseSecretKeySeed(seed)
+	seckey := ParseSecretKey(seed)
 
 	expectedPubkey, _ := hex.DecodeString(ietfVectors.PublicKey)
 	pubkey := seckey.PublicKey()
@@ -243,10 +243,10 @@ func TestIETFVectors(t *testing.T) {
 func TestPKCS8Encoding(t *testing.T) {
 	// Parse the secret key from seed and from PKCS8
 	seedBytes, _ := hex.DecodeString(ietfVectors.SecretKey)
-	var seed [SecretKeySeedSize]byte
+	var seed [SecretKeySize]byte
 	copy(seed[:], seedBytes)
 
-	seckeyFromSeed := ParseSecretKeySeed(seed)
+	seckeyFromSeed := ParseSecretKey(seed)
 
 	pkcs8Bytes, _ := hex.DecodeString(ietfVectors.SecretKeyDER)
 	seckeyFromPKCS8, err := ParseSecretKeyDER(pkcs8Bytes)
