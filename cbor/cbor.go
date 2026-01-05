@@ -16,7 +16,7 @@
 //   - UTF-8 text strings: string
 //   - Byte strings:       []byte, [N]byte
 //   - Arrays:             slices, arrays
-//   - Maps:               map[int]V
+//   - Maps:               map[int64]V
 package cbor
 
 import (
@@ -75,6 +75,7 @@ func init() {
 		Sort:          cbor.SortBytewiseLexical,
 		IndefLength:   cbor.IndefLengthForbidden,
 		NilContainers: cbor.NilContainerAsEmpty,
+		TagsMd:        cbor.TagsForbidden,
 	}.EncMode()
 	if err != nil {
 		panic(err)
@@ -82,6 +83,7 @@ func init() {
 	decoder, err = cbor.DecOptions{
 		DupMapKey:   cbor.DupMapKeyEnforcedAPF,
 		IndefLength: cbor.IndefLengthForbidden,
+		TagsMd:      cbor.TagsForbidden,
 		UTF8:        cbor.UTF8RejectInvalid,
 	}.DecMode()
 	if err != nil {
