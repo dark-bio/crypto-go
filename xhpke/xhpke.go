@@ -15,10 +15,10 @@ import (
 	"crypto/sha256"
 	"crypto/x509/pkix"
 	"encoding/asn1"
-	"encoding/pem"
 	"errors"
 
 	"github.com/dark-bio/crypto-go/internal/asn1ext"
+	"github.com/dark-bio/crypto-go/pem"
 )
 
 const (
@@ -109,16 +109,14 @@ func MustParseSecretKeyDER(der []byte) *SecretKey {
 
 // ParseSecretKeyPEM parses a PEM string into a private key.
 func ParseSecretKeyPEM(s string) (*SecretKey, error) {
-	// Crack open the PEM to get to the private key info
-	block, _ := pem.Decode([]byte(s))
-	if block == nil {
-		return nil, errors.New("xhpke: invalid PEM")
+	kind, blob, err := pem.Decode([]byte(s))
+	if err != nil {
+		return nil, err
 	}
-	if block.Type != "PRIVATE KEY" {
-		return nil, errors.New("xhpke: invalid PEM type: " + block.Type)
+	if kind != "PRIVATE KEY" {
+		return nil, errors.New("xhpke: invalid PEM type: " + kind)
 	}
-	// Parse the DER content
-	return ParseSecretKeyDER(block.Bytes)
+	return ParseSecretKeyDER(blob)
 }
 
 // MustParseSecretKeyPEM parses a PEM string into a private key.
@@ -156,11 +154,7 @@ func (k *SecretKey) MarshalDER() []byte {
 
 // MarshalPEM serializes a private key into a PEM string.
 func (k *SecretKey) MarshalPEM() string {
-	block := &pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: k.MarshalDER(),
-	}
-	return string(pem.EncodeToMemory(block))
+	return string(pem.Encode("PRIVATE KEY", k.MarshalDER()))
 }
 
 // PublicKey retrieves the public counterpart of the secret key.
@@ -257,16 +251,14 @@ func MustParsePublicKeyDER(der []byte) *PublicKey {
 
 // ParsePublicKeyPEM parses a PEM string into a public key.
 func ParsePublicKeyPEM(s string) (*PublicKey, error) {
-	// Crack open the PEM to get to the public key info
-	block, _ := pem.Decode([]byte(s))
-	if block == nil {
-		return nil, errors.New("xhpke: invalid PEM")
+	kind, blob, err := pem.Decode([]byte(s))
+	if err != nil {
+		return nil, err
 	}
-	if block.Type != "PUBLIC KEY" {
-		return nil, errors.New("xhpke: invalid PEM type: " + block.Type)
+	if kind != "PUBLIC KEY" {
+		return nil, errors.New("xhpke: invalid PEM type: " + kind)
 	}
-	// Parse the DER content
-	return ParsePublicKeyDER(block.Bytes)
+	return ParsePublicKeyDER(blob)
 }
 
 // MustParsePublicKeyPEM parses a PEM string into a public key.
@@ -307,11 +299,7 @@ func (k *PublicKey) MarshalDER() []byte {
 
 // MarshalPEM serializes a public key into a PEM string.
 func (k *PublicKey) MarshalPEM() string {
-	block := &pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: k.MarshalDER(),
-	}
-	return string(pem.EncodeToMemory(block))
+	return string(pem.Encode("PUBLIC KEY", k.MarshalDER()))
 }
 
 // Fingerprint returns a 256-bit unique identifier for this key.

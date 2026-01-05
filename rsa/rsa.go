@@ -16,9 +16,10 @@ import (
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"math/big"
+
+	"github.com/dark-bio/crypto-go/pem"
 )
 
 const (
@@ -138,11 +139,11 @@ func MustParseSecretKeyDER(der []byte) *SecretKey {
 
 // ParseSecretKeyPEM parses a PEM-encoded private key.
 func ParseSecretKeyPEM(s string) (*SecretKey, error) {
-	block, _ := pem.Decode([]byte(s))
-	if block == nil {
-		return nil, errors.New("rsa: invalid PEM")
+	_, blob, err := pem.Decode([]byte(s))
+	if err != nil {
+		return nil, err
 	}
-	return ParseSecretKeyDER(block.Bytes)
+	return ParseSecretKeyDER(blob)
 }
 
 // MustParseSecretKeyPEM parses a PEM-encoded private key.
@@ -185,11 +186,7 @@ func (k *SecretKey) MarshalDER() []byte {
 
 // MarshalPEM serializes the private key to PEM format.
 func (k *SecretKey) MarshalPEM() string {
-	block := &pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: k.MarshalDER(),
-	}
-	return string(pem.EncodeToMemory(block))
+	return string(pem.Encode("PRIVATE KEY", k.MarshalDER()))
 }
 
 // PublicKey returns the public counterpart of the secret key.
@@ -288,11 +285,11 @@ func MustParsePublicKeyDER(der []byte) *PublicKey {
 
 // ParsePublicKeyPEM parses a PEM-encoded public key.
 func ParsePublicKeyPEM(s string) (*PublicKey, error) {
-	block, _ := pem.Decode([]byte(s))
-	if block == nil {
-		return nil, errors.New("rsa: invalid PEM")
+	_, blob, err := pem.Decode([]byte(s))
+	if err != nil {
+		return nil, err
 	}
-	return ParsePublicKeyDER(block.Bytes)
+	return ParsePublicKeyDER(blob)
 }
 
 // MustParsePublicKeyPEM parses a PEM-encoded public key.
@@ -328,11 +325,7 @@ func (k *PublicKey) MarshalDER() []byte {
 
 // MarshalPEM serializes the public key to PEM format.
 func (k *PublicKey) MarshalPEM() string {
-	block := &pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: k.MarshalDER(),
-	}
-	return string(pem.EncodeToMemory(block))
+	return string(pem.Encode("PUBLIC KEY", k.MarshalDER()))
 }
 
 // Fingerprint returns a 256-bit unique identifier for this key. For RSA, that
