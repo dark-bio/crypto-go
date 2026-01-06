@@ -16,7 +16,6 @@ import (
 	"encoding/asn1"
 	"math/big"
 	"time"
-	"unicode/utf8"
 	"unsafe"
 
 	"github.com/dark-bio/crypto-go/x509"
@@ -85,15 +84,7 @@ type certificate struct {
 
 // New creates an X.509 certificate for a subject, signed by the given signer.
 func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509.Params) []byte {
-	// Validate common names are valid UTF-8
-	if !utf8.ValidString(params.SubjectName) {
-		panic("x509: subject name is not valid UTF-8")
-	}
-	if !utf8.ValidString(params.IssuerName) {
-		panic("x509: issuer name is not valid UTF-8")
-	}
-
-	// Generate a random 128-bit serial number (positive)
+	// Generate a random serial number
 	serialBytes := make([]byte, 16)
 	if _, err := rand.Read(serialBytes); err != nil {
 		panic("x509: " + err.Error())
@@ -106,9 +97,17 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 		Algorithm: oidXDSA,
 	}
 
-	// Build subject and issuer names
-	issuerName := makeCNName(params.IssuerName)
-	subjectName := makeCNName(params.SubjectName)
+	// Build subject and issuer names using pkix.Name
+	issuerRDN, err := asn1.Marshal(pkix.Name{CommonName: params.IssuerName}.ToRDNSequence())
+	if err != nil {
+		panic("x509: " + err.Error())
+	}
+	subjectRDN, err := asn1.Marshal(pkix.Name{CommonName: params.SubjectName}.ToRDNSequence())
+	if err != nil {
+		panic("x509: " + err.Error())
+	}
+	issuerName := asn1.RawValue{FullBytes: issuerRDN}
+	subjectName := asn1.RawValue{FullBytes: subjectRDN}
 
 	// Build the subject public key info
 	subjectArray := subject.Marshal()
@@ -130,11 +129,14 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 			BitLength: len(subjectBytes) * 8,
 		},
 	}
-
-	// Build extensions
+	// Build extensions for the key identities and constraints
 	pk := signer.PublicKey()
-	extensions := makeExtensions(subjectBytes, pk[:], params.IsCA, params.PathLen)
-
+	extensions := []pkix.Extension{
+		makeBasicConstraintsExt(params.IsCA, params.PathLen),
+		makeKeyUsageExt(params.IsCA),
+		makeSKIExt(subjectBytes),
+		makeAKIExt(pk[:]),
+	}
 	// Build the TBS certificate
 	tbs := tbsCertificate{
 		Version:            2, // v3
@@ -149,27 +151,22 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 		PublicKeyInfo: spki,
 		Extensions:    extensions,
 	}
-
-	// Encode TBS certificate
+	// Encode and sign the TBS certificate
 	tbsDER, err := asn1.Marshal(tbs)
 	if err != nil {
 		panic("x509: " + err.Error())
 	}
+	sig := signer.Sign(tbsDER)
 
-	// Sign the TBS certificate
-	signature := signer.Sign(tbsDER)
-
-	// Build the complete certificate
+	// Create the final certificate
 	cert := certificate{
 		TBSCertificate:     asn1.RawValue{FullBytes: tbsDER},
 		SignatureAlgorithm: sigAlg,
 		SignatureValue: asn1.BitString{
-			Bytes:     signature[:],
-			BitLength: len(signature) * 8,
+			Bytes:     sig[:],
+			BitLength: len(sig) * 8,
 		},
 	}
-
-	// Encode the complete certificate
 	certDER, err := asn1.Marshal(cert)
 	if err != nil {
 		panic("x509: " + err.Error())
@@ -177,58 +174,9 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 	return certDER
 }
 
-// makeCNName creates a distinguished name with only a CommonName.
-func makeCNName(cn string) asn1.RawValue {
-	// OID 2.5.4.3 = CommonName
-	cnOID := asn1.ObjectIdentifier{2, 5, 4, 3}
-
-	// AttributeTypeAndValue
-	atv := []interface{}{cnOID, cn}
-	atvDER, _ := asn1.Marshal(atv)
-
-	// RelativeDistinguishedName (SET OF AttributeTypeAndValue)
-	rdn := asn1.RawValue{
-		Class:      asn1.ClassUniversal,
-		Tag:        asn1.TagSet,
-		IsCompound: true,
-		Bytes:      atvDER,
-	}
-	rdnDER, _ := asn1.Marshal(rdn)
-
-	// Name (SEQUENCE OF RelativeDistinguishedName)
-	name := asn1.RawValue{
-		Class:      asn1.ClassUniversal,
-		Tag:        asn1.TagSequence,
-		IsCompound: true,
-		Bytes:      rdnDER,
-	}
-	nameDER, _ := asn1.Marshal(name)
-
-	return asn1.RawValue{FullBytes: nameDER}
-}
-
-// makeExtensions builds the certificate extensions.
-func makeExtensions(subjectPubKey []byte, issuerPubKey []byte, isCA bool, pathLen *uint8) []pkix.Extension {
-	extensions := make([]pkix.Extension, 0, 4)
-
-	// BasicConstraints (critical)
-	extensions = append(extensions, makeBasicConstraintsExt(isCA, pathLen))
-
-	// KeyUsage (critical)
-	extensions = append(extensions, makeKeyUsageExt(isCA))
-
-	// SubjectKeyIdentifier
-	extensions = append(extensions, makeSKIExt(subjectPubKey))
-
-	// AuthorityKeyIdentifier
-	extensions = append(extensions, makeAKIExt(issuerPubKey))
-
-	return extensions
-}
-
 // makeSKIExt creates a SubjectKeyIdentifier extension.
 func makeSKIExt(publicKey []byte) pkix.Extension {
-	// SHA1 hash of the public key
+	// Create the SHA1 hash of the subject public key
 	hash := sha1.Sum(publicKey)
 
 	// Encode as OCTET STRING
@@ -243,7 +191,7 @@ func makeSKIExt(publicKey []byte) pkix.Extension {
 
 // makeAKIExt creates an AuthorityKeyIdentifier extension.
 func makeAKIExt(publicKey []byte) pkix.Extension {
-	// SHA1 hash of the issuer public key
+	// Create the SHA1 hash of the issuer public key
 	hash := sha1.Sum(publicKey)
 
 	// AuthorityKeyIdentifier ::= SEQUENCE {
@@ -273,21 +221,23 @@ func makeAKIExt(publicKey []byte) pkix.Extension {
 	}
 }
 
-// makeBasicConstraintsExt creates a BasicConstraints extension.
-func makeBasicConstraintsExt(isCA bool, pathLen *uint8) pkix.Extension {
-	var buf []byte
-	if isCA {
-		buf = append(buf, 0x01, 0x01, 0xFF) // BOOLEAN TRUE
-		if pathLen != nil {
-			plBytes, _ := asn1.Marshal(int(*pathLen))
-			buf = append(buf, plBytes...)
-		}
-	}
+// basicConstraints is the ASN.1 structure for BasicConstraints extension.
+type basicConstraints struct {
+	IsCA       bool `asn1:"optional"`
+	MaxPathLen int  `asn1:"optional,default:-1"`
+}
 
-	// Wrap in SEQUENCE
-	value := make([]byte, 0, len(buf)+2)
-	value = append(value, 0x30, byte(len(buf)))
-	value = append(value, buf...)
+// makeBasicConstraintsExt creates a BasicConstraints extension.
+//
+// For CA certificates, set `is_ca=true`. The `path_len` constrains how many
+// intermediate CAs can follow (e.g., 0 means can only sign end-entity certs).
+func makeBasicConstraintsExt(isCA bool, pathLen *uint8) pkix.Extension {
+	// BasicConstraints ::= SEQUENCE { cA BOOLEAN DEFAULT FALSE, pathLenConstraint INTEGER OPTIONAL }
+	bc := basicConstraints{IsCA: isCA, MaxPathLen: -1}
+	if pathLen != nil {
+		bc.MaxPathLen = int(*pathLen)
+	}
+	value, _ := asn1.Marshal(bc)
 
 	return pkix.Extension{
 		Id:       asn1.ObjectIdentifier{2, 5, 29, 19}, // id-ce-basicConstraints
@@ -297,19 +247,18 @@ func makeBasicConstraintsExt(isCA bool, pathLen *uint8) pkix.Extension {
 }
 
 // makeKeyUsageExt creates a KeyUsage extension.
+//
+// For CA certificates, sets keyCertSign (bit 5) and cRLSign (bit 6).
+// For end-entity certificates, sets digitalSignature (bit 0).
 func makeKeyUsageExt(isCA bool) pkix.Extension {
-	var usageByte byte
-	var unusedBits byte
-
+	// KeyUsage ::= BIT STRING { Bit 0: digitalSignature, Bit 5: keyCertSign, Bit 6: cRLSign }
+	var usage asn1.BitString
 	if isCA {
-		usageByte = 0b0000_0110 // keyCertSign + cRLSign
-		unusedBits = 1
+		usage = asn1.BitString{Bytes: []byte{0b0000_0110}, BitLength: 7} // keyCertSign (bit 5) + cRLSign (bit 6), 1 unused bit
 	} else {
-		usageByte = 0b1000_0000 // digitalSignature
-		unusedBits = 7
+		usage = asn1.BitString{Bytes: []byte{0b1000_0000}, BitLength: 1} // digitalSignature (bit 0), 7 unused bits
 	}
-
-	value := []byte{0x03, 0x02, unusedBits, usageByte}
+	value, _ := asn1.Marshal(usage)
 
 	return pkix.Extension{
 		Id:       asn1.ObjectIdentifier{2, 5, 29, 15}, // id-ce-keyUsage
