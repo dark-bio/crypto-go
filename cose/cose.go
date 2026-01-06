@@ -19,15 +19,15 @@ import (
 	"github.com/dark-bio/crypto-go/xhpke"
 )
 
-// Algorithm identifiers for COSE operations
+// algorithm identifiers for COSE operations
 const (
-	// AlgorithmXDSA is the private COSE algorithm identifier for composite
+	// algorithmXDSA is the private COSE algorithm identifier for composite
 	// ML-DSA-65 + Ed25519 signatures.
-	AlgorithmXDSA = -70000
+	algorithmXDSA = -70000
 
-	// AlgorithmXHPKE is the private COSE algorithm identifier for X-Wing
+	// algorithmXHPKE is the private COSE algorithm identifier for X-Wing
 	// (ML-KEM-768 + X25519) HPKE.
-	AlgorithmXHPKE = -70001
+	algorithmXHPKE = -70001
 )
 
 // Error types for COSE operations
@@ -38,20 +38,20 @@ var (
 	ErrDecryptionFailed    = errors.New("cose: decryption failed")
 )
 
-// ProtectedHeader contains the algorithm identifier.
-type ProtectedHeader struct {
+// protectedHeader contains the algorithm identifier.
+type protectedHeader struct {
 	Algorithm int64 `cbor:"1,key"`
 }
 
-// EmptyHeader is an empty unprotected header map (for COSE_Sign1).
-type EmptyHeader struct{}
+// emptyHeader is an empty unprotected header map (for COSE_Sign1).
+type emptyHeader struct{}
 
-// EncapKeyHeader contains the encapsulated key (for COSE_Encrypt0).
-type EncapKeyHeader struct {
+// encapKeyHeader contains the encapsulated key (for COSE_Encrypt0).
+type encapKeyHeader struct {
 	EncapKey []byte `cbor:"-4,key"`
 }
 
-// CoseSign1 is the COSE_Sign1 structure per RFC 9052 Section 4.2.
+// coseSign1 is the COSE_Sign1 structure per RFC 9052 Section 4.2.
 //
 //	COSE_Sign1 = [
 //	    protected:   bstr,
@@ -59,29 +59,29 @@ type EncapKeyHeader struct {
 //	    payload:     bstr,
 //	    signature:   bstr
 //	]
-type CoseSign1 struct {
+type coseSign1 struct {
 	_           struct{} `cbor:"_,array"`
 	Protected   []byte
-	Unprotected EmptyHeader
+	Unprotected emptyHeader
 	Payload     []byte
 	Signature   [xdsa.SignatureSize]byte
 }
 
-// CoseEncrypt0 is the COSE_Encrypt0 structure per RFC 9052 Section 5.2.
+// coseEncrypt0 is the COSE_Encrypt0 structure per RFC 9052 Section 5.2.
 //
 //	COSE_Encrypt0 = [
 //	    protected:   bstr,
 //	    unprotected: header_map,
 //	    ciphertext:  bstr
 //	]
-type CoseEncrypt0 struct {
+type coseEncrypt0 struct {
 	_           struct{} `cbor:"_,array"`
 	Protected   []byte
-	Unprotected EncapKeyHeader
+	Unprotected encapKeyHeader
 	Ciphertext  []byte
 }
 
-// SigStructure is the Sig_structure for computing signatures per RFC 9052 Section 4.4.
+// sigStructure is the Sig_structure for computing signatures per RFC 9052 Section 4.4.
 //
 //	Sig_structure = [
 //	    context:        "Signature1",
@@ -89,7 +89,7 @@ type CoseEncrypt0 struct {
 //	    external_aad:   bstr,
 //	    payload:        bstr
 //	]
-type SigStructure struct {
+type sigStructure struct {
 	_           struct{} `cbor:"_,array"`
 	Context     string
 	Protected   []byte
@@ -97,14 +97,14 @@ type SigStructure struct {
 	Payload     []byte
 }
 
-// EncStructure is the Enc_structure for computing AAD per RFC 9052 Section 5.3.
+// encStructure is the Enc_structure for computing AAD per RFC 9052 Section 5.3.
 //
 //	Enc_structure = [
 //	    context:      "Encrypt0",
 //	    protected:    bstr,
 //	    external_aad: bstr
 //	]
-type EncStructure struct {
+type encStructure struct {
 	_           struct{} `cbor:"_,array"`
 	Context     string
 	Protected   []byte
@@ -120,27 +120,27 @@ type EncStructure struct {
 // Returns the serialized COSE_Sign1 structure.
 func Sign(msgToEmbed, msgToAuth []byte, signer *xdsa.SecretKey) []byte {
 	// Build protected header
-	protected, err := cbor.Marshal(&ProtectedHeader{Algorithm: AlgorithmXDSA})
+	protected, err := cbor.Marshal(&protectedHeader{Algorithm: algorithmXDSA})
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
 	// Build and sign Sig_structure
-	sigStructure := SigStructure{
+	sig := sigStructure{
 		Context:     "Signature1",
 		Protected:   protected,
 		ExternalAAD: msgToAuth,
 		Payload:     msgToEmbed,
 	}
-	toBeSigned, err := cbor.Marshal(&sigStructure)
+	toBeSigned, err := cbor.Marshal(&sig)
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
 	signature := signer.Sign(toBeSigned)
 
 	// Build and encode COSE_Sign1
-	sign1 := CoseSign1{
+	sign1 := coseSign1{
 		Protected:   protected,
-		Unprotected: EmptyHeader{},
+		Unprotected: emptyHeader{},
 		Payload:     msgToEmbed,
 		Signature:   signature,
 	}
@@ -160,22 +160,22 @@ func Sign(msgToEmbed, msgToAuth []byte, signer *xdsa.SecretKey) []byte {
 // Returns the embedded payload if verification succeeds.
 func Verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey) ([]byte, error) {
 	// Parse COSE_Sign1
-	var sign1 CoseSign1
+	var sign1 coseSign1
 	if err := cbor.Unmarshal(msgToCheck, &sign1); err != nil {
 		return nil, err
 	}
 	// Verify the protected header
-	if err := verifyProtectedHeader(sign1.Protected, AlgorithmXDSA); err != nil {
+	if err := verifyProtectedHeader(sign1.Protected, algorithmXDSA); err != nil {
 		return nil, err
 	}
 	// Reconstruct Sig_structure to verify
-	sigStructure := SigStructure{
+	sig := sigStructure{
 		Context:     "Signature1",
 		Protected:   sign1.Protected,
 		ExternalAAD: msgToAuth,
 		Payload:     sign1.Payload,
 	}
-	toBeSigned, _ := cbor.Marshal(&sigStructure)
+	toBeSigned, _ := cbor.Marshal(&sig)
 
 	// Verify signature
 	if err := verifier.Verify(toBeSigned, sign1.Signature); err != nil {
@@ -198,17 +198,17 @@ func Seal(msgToSeal, msgToAuth []byte, signer *xdsa.SecretKey, recipient *xhpke.
 	signed := Sign(msgToSeal, msgToAuth, signer)
 
 	// Build protected header
-	protected, err := cbor.Marshal(&ProtectedHeader{Algorithm: AlgorithmXHPKE})
+	protected, err := cbor.Marshal(&protectedHeader{Algorithm: algorithmXHPKE})
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
 	// Build and seal Enc_structure
-	encStructure := EncStructure{
+	enc := encStructure{
 		Context:     "Encrypt0",
 		Protected:   protected,
 		ExternalAAD: msgToAuth,
 	}
-	aad, err := cbor.Marshal(&encStructure)
+	aad, err := cbor.Marshal(&enc)
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
@@ -217,9 +217,9 @@ func Seal(msgToSeal, msgToAuth []byte, signer *xdsa.SecretKey, recipient *xhpke.
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
 	// Build and encode COSE_Encrypt0
-	encrypt0 := CoseEncrypt0{
+	encrypt0 := coseEncrypt0{
 		Protected: protected,
-		Unprotected: EncapKeyHeader{
+		Unprotected: encapKeyHeader{
 			EncapKey: encapKey[:],
 		},
 		Ciphertext: ciphertext,
@@ -242,12 +242,12 @@ func Seal(msgToSeal, msgToAuth []byte, signer *xdsa.SecretKey, recipient *xhpke.
 // Returns the original payload if decryption and verification succeed.
 func Open(msgToOpen, msgToAuth []byte, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain string) ([]byte, error) {
 	// Parse COSE_Encrypt0
-	var encrypt0 CoseEncrypt0
+	var encrypt0 coseEncrypt0
 	if err := cbor.Unmarshal(msgToOpen, &encrypt0); err != nil {
 		return nil, err
 	}
 	// Verify protected header
-	if err := verifyProtectedHeader(encrypt0.Protected, AlgorithmXHPKE); err != nil {
+	if err := verifyProtectedHeader(encrypt0.Protected, algorithmXHPKE); err != nil {
 		return nil, err
 	}
 	// Extract encapsulated key from the unprotected headers
@@ -259,12 +259,12 @@ func Open(msgToOpen, msgToAuth []byte, recipient *xhpke.SecretKey, sender *xdsa.
 	copy(encapKey[:], encrypt0.Unprotected.EncapKey)
 
 	// Rebuild and open Enc_structure
-	encStructure := EncStructure{
+	enc := encStructure{
 		Context:     "Encrypt0",
 		Protected:   encrypt0.Protected,
 		ExternalAAD: msgToAuth,
 	}
-	aad, err := cbor.Marshal(&encStructure)
+	aad, err := cbor.Marshal(&enc)
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
@@ -278,7 +278,7 @@ func Open(msgToOpen, msgToAuth []byte, recipient *xhpke.SecretKey, sender *xdsa.
 
 // verifyProtectedHeader verifies the protected header contains exactly the expected algorithm.
 func verifyProtectedHeader(data []byte, expectedAlg int64) error {
-	var header ProtectedHeader
+	var header protectedHeader
 	if err := cbor.Unmarshal(data, &header); err != nil {
 		return err
 	}
