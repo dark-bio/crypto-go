@@ -4,19 +4,19 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package cbor implements a restricted CBOR encoder and decoder.
+// Package cbor implements a tiny CBOR encoder and decoder.
 //
 // https://datatracker.ietf.org/doc/html/rfc8949
 //
 // This is an implementation of the CBOR spec with an extremely reduced type
 // system, focusing on security rather than flexibility or completeness. The
 // following types are supported:
-//   - Positive integers:  uint, uint8, uint16, uint32, uint64
-//   - Signed integers:    int, int8, int16, int32, int64
-//   - UTF-8 text strings: string
-//   - Byte strings:       []byte, [N]byte
-//   - Arrays:             slices, arrays
-//   - Maps:               map[int64]V
+//   - 64bit positive integers: uint64
+//   - 64bit signed integers:   int64
+//   - UTF-8 text strings:      string
+//   - Byte strings:            []byte, [N]byte
+//   - Arrays:                  structs with cbor:"_,array" tag
+//   - Maps:                    structs with cbor:"N,key" tags (integer keys only)
 package cbor
 
 import (
@@ -24,9 +24,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"unicode/utf8"
-
-	"github.com/fxamacker/cbor/v2"
 )
 
 // Supported CBOR major types
@@ -52,230 +51,246 @@ const maxInt = int(^uint(0) >> 1)
 
 // Error types for CBOR encoding/decoding failures
 var (
+	ErrInvalidMajorType      = errors.New("invalid major type")
 	ErrInvalidAdditionalInfo = errors.New("invalid additional info")
 	ErrUnexpectedEOF         = errors.New("unexpected end of data")
 	ErrNonCanonical          = errors.New("non-canonical encoding")
 	ErrInvalidUTF8           = errors.New("invalid UTF-8 in text string")
 	ErrTrailingBytes         = errors.New("unexpected trailing bytes")
+	ErrUnexpectedItemCount   = errors.New("unexpected item count")
 	ErrUnsupportedType       = errors.New("unsupported type")
-	ErrInvalidMapKeyOrder    = errors.New("invalid map key order")
 	ErrIntegerOverflow       = errors.New("integer overflow")
+	ErrDuplicateMapKey       = errors.New("duplicate map key")
+	ErrInvalidMapKeyOrder    = errors.New("invalid map key order")
 )
 
-// encoder is the encoding mode configured for deterministic output.
-var encoder cbor.EncMode
+// Encoder is the low-level implementation of the CBOR encoder with only the
+// handful of desired types supported.
+type Encoder struct {
+	buf []byte
+}
 
-// decoder is the decoding mode configured for strict validation.
-var decoder cbor.DecMode
+// NewEncoder creates a CBOR encoder with an underlying buffer, pre-allocated
+// to 1KB (small enough not to be relevant, large enough to avoid tiny appends).
+func NewEncoder() *Encoder {
+	return &Encoder{buf: make([]byte, 0, 1024)}
+}
 
-func init() {
-	var err error
+// Bytes returns the accumulated CBOR data.
+func (e *Encoder) Bytes() []byte {
+	return e.buf
+}
 
-	encoder, err = cbor.EncOptions{
-		Sort:          cbor.SortBytewiseLexical,
-		IndefLength:   cbor.IndefLengthForbidden,
-		NilContainers: cbor.NilContainerAsEmpty,
-		TagsMd:        cbor.TagsForbidden,
-	}.EncMode()
-	if err != nil {
-		panic(err)
-	}
-	decoder, err = cbor.DecOptions{
-		DupMapKey:   cbor.DupMapKeyEnforcedAPF,
-		IndefLength: cbor.IndefLengthForbidden,
-		TagsMd:      cbor.TagsForbidden,
-		UTF8:        cbor.UTF8RejectInvalid,
-	}.DecMode()
-	if err != nil {
-		panic(err)
+// EncodeUint encodes a positive integer into its canonical shortest-form.
+func (e *Encoder) EncodeUint(value uint64) {
+	e.encodeLength(majorUint, value)
+}
+
+// EncodeInt encodes a signed integer into its canonical shortest-form.
+func (e *Encoder) EncodeInt(value int64) {
+	if value >= 0 {
+		e.encodeLength(majorUint, uint64(value))
+	} else {
+		e.encodeLength(majorNint, uint64(-1-value))
 	}
 }
 
-// Marshal encodes a value to CBOR and verifies that the output contains only
-// permitted types. Ideally we'd flag the error on the fly, but that requires
-// hooking into the encoder, which we cannot do.
-func Marshal(v any) ([]byte, error) {
-	// Encode the value via the upstream package
-	data, err := encoder.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	// Run the encoded data past the local type restricter
-	if err := Verify(data); err != nil {
-		return nil, fmt.Errorf("cbor: encoded data failed verification: %w", err)
-	}
-	return data, nil
+// EncodeBytes encodes an opaque byte string.
+func (e *Encoder) EncodeBytes(value []byte) {
+	e.encodeLength(majorBytes, uint64(len(value)))
+	e.buf = append(e.buf, value...)
 }
 
-// Unmarshal verifies that the CBOR data contains only permitted types, then
-// decodes it. Ideally we'd flag the error on the fly, but that requires hooking
-// into the decoder, which we cannot do.
-func Unmarshal(data []byte, v any) error {
-	// Run the encoded data past teh local type restricter
-	if err := Verify(data); err != nil {
-		return err
-	}
-	// Decode the value via the upstream package
-	return decoder.Unmarshal(data, v)
+// EncodeText encodes a UTF-8 text string.
+func (e *Encoder) EncodeText(value string) {
+	e.encodeLength(majorText, uint64(len(value)))
+	e.buf = append(e.buf, value...)
 }
 
-// Verify does a dry-run walk of the CBOR data to verify that only the permitted
-// subset of types has been used.
-func Verify(data []byte) error {
-	dec := &verifier{data: data, pos: 0}
-	if err := dec.verifyObject(); err != nil {
-		return err
+// EncodeArrayHeader encodes an array size.
+func (e *Encoder) EncodeArrayHeader(length int) {
+	e.encodeLength(majorArray, uint64(length))
+}
+
+// EncodeMapHeader encodes a map size.
+func (e *Encoder) EncodeMapHeader(length int) {
+	e.encodeLength(majorMap, uint64(length))
+}
+
+// encodeLength encodes a major type with an unsigned integer, which defines
+// the length for most types, or the value itself for integers.
+func (e *Encoder) encodeLength(majorType uint8, length uint64) {
+	switch {
+	case length < 24:
+		e.buf = append(e.buf, majorType<<5|uint8(length))
+	case length <= 0xFF:
+		e.buf = append(e.buf, majorType<<5|infoUint8, uint8(length))
+	case length <= 0xFFFF:
+		e.buf = append(e.buf, majorType<<5|infoUint16)
+		e.buf = binary.BigEndian.AppendUint16(e.buf, uint16(length))
+	case length <= 0xFFFFFFFF:
+		e.buf = append(e.buf, majorType<<5|infoUint32)
+		e.buf = binary.BigEndian.AppendUint32(e.buf, uint32(length))
+	default:
+		e.buf = append(e.buf, majorType<<5|infoUint64)
+		e.buf = binary.BigEndian.AppendUint64(e.buf, length)
 	}
-	if dec.pos != len(dec.data) {
+}
+
+// Decoder is the low-level implementation of the CBOR decoder with only the
+// handful of desired types supported.
+type Decoder struct {
+	data []byte
+	pos  int
+}
+
+// NewDecoder creates a decoder around a data blob.
+func NewDecoder(data []byte) *Decoder {
+	return &Decoder{data: data, pos: 0}
+}
+
+// Finish terminates decoding and returns an error if trailing bytes remain.
+func (d *Decoder) Finish() error {
+	if d.pos != len(d.data) {
 		return ErrTrailingBytes
 	}
 	return nil
 }
 
-// verifier walks CBOR data to check for disallowed types.
-type verifier struct {
-	data []byte
-	pos  int
-}
-
-// verifyObject verifies a single CBOR item without full deserialization.
-func (v *verifier) verifyObject() error {
-	// Decode the header for the next value
-	major, value, err := v.decodeHeader()
+// DecodeUint decodes a positive integer, enforcing minimal canonicalness.
+func (d *Decoder) DecodeUint() (uint64, error) {
+	major, value, err := d.decodeHeader()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	switch major {
-	case majorUint, majorNint:
-		// Integers are valid (canonicalness was already verified in the
-		// header decoding). Overflow checking is done at decode time based
-		// on the target type (u64 vs i64).
-		return nil
-
-	case majorBytes:
-		// Opaque bytes are always valid, skip over
-		_, err := v.readBytes(value)
-		return err
-
-	case majorText:
-		// Verify that the text is indeed UTF-8
-		bytes, err := v.readBytes(value)
-		if err != nil {
-			return err
-		}
-		if !utf8.Valid(bytes) {
-			return ErrInvalidUTF8
-		}
-		return nil
-
-	case majorArray:
-		// Recursively verify each array element
-		for range value {
-			if err := v.verifyObject(); err != nil {
-				return err
-			}
-		}
-		return nil
-
-	case majorMap:
-		// Verify map has integer keys in deterministic order
-		var prevKey *int64
-		for range value {
-			// Decode and verify the key is an integer
-			key, err := v.decodeMapKey()
-			if err != nil {
-				return err
-			}
-			// Verify deterministic ordering
-			if prevKey != nil && !mapKeyLess(*prevKey, key) {
-				return ErrInvalidMapKeyOrder
-			}
-			prevKey = &key
-
-			// Recursively verify the value
-			if err := v.verifyObject(); err != nil {
-				return err
-			}
-		}
-		return nil
-
-	default:
-		return fmt.Errorf("%w: major type %d", ErrUnsupportedType, major)
+	if major != majorUint {
+		return 0, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorUint)
 	}
+	return value, nil
 }
 
-// decodeMapKey decodes and verifies a map key is an integer (major type 0 or 1).
-func (v *verifier) decodeMapKey() (int64, error) {
-	major, value, err := v.decodeHeader()
+// DecodeInt decodes a signed integer (major type 0 or 1).
+func (d *Decoder) DecodeInt() (int64, error) {
+	major, value, err := d.decodeHeader()
 	if err != nil {
 		return 0, err
 	}
 	switch major {
 	case majorUint:
-		if value > uint64(math.MaxInt64) {
-			return 0, ErrIntegerOverflow
+		if value > math.MaxInt64 {
+			return 0, fmt.Errorf("%w: positive %d exceeds max %d", ErrIntegerOverflow, value, uint64(math.MaxInt64))
 		}
 		return int64(value), nil
 	case majorNint:
-		if value > uint64(math.MaxInt64) {
-			return 0, ErrIntegerOverflow
+		if value > math.MaxInt64 {
+			return 0, fmt.Errorf("%w: negative %d exceeds max %d", ErrIntegerOverflow, value, uint64(math.MaxInt64))
 		}
 		return -1 - int64(value), nil
 	default:
-		return 0, fmt.Errorf("%w: map key must be integer, got major type %d", ErrUnsupportedType, major)
+		return 0, fmt.Errorf("%w: %d, want %d or %d", ErrInvalidMajorType, major, majorUint, majorNint)
 	}
 }
 
-// mapKeyLess returns true if a < b using deterministic CBOR map key ordering
-// (RFC 8949 Section 4.2.1): bytewise lexicographic order of encoded keys.
-func mapKeyLess(a, b int64) bool {
-	aEnc := encodeInt(a)
-	bEnc := encodeInt(b)
-	for i := range aEnc {
-		if i >= len(bEnc) {
-			return false
-		}
-		if aEnc[i] != bEnc[i] {
-			return aEnc[i] < bEnc[i]
-		}
+// DecodeBytes decodes a byte string.
+func (d *Decoder) DecodeBytes() ([]byte, error) {
+	// Extract the field type and attached length
+	major, length, err := d.decodeHeader()
+	if err != nil {
+		return nil, err
 	}
-	return len(aEnc) < len(bEnc)
+	if major != majorBytes {
+		return nil, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorBytes)
+	}
+	// Retrieve the blob and return as is
+	bytes, err := d.readBytes(length)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]byte, len(bytes))
+	copy(result, bytes)
+	return result, nil
 }
 
-// encodeInt encodes an integer to canonical CBOR format.
-func encodeInt(v int64) []byte {
-	var major uint8
-	var u uint64
-	if v >= 0 {
-		major = majorUint
-		u = uint64(v)
-	} else {
-		major = majorNint
-		u = uint64(-1 - v)
+// DecodeBytesFixed decodes a byte string into a fixed-size array.
+func (d *Decoder) DecodeBytesFixed(n int) ([]byte, error) {
+	// Extract the field type and attached length
+	major, length, err := d.decodeHeader()
+	if err != nil {
+		return nil, err
 	}
-	switch {
-	case u < 24:
-		return []byte{major<<5 | uint8(u)}
-	case u <= 0xFF:
-		return []byte{major<<5 | infoUint8, uint8(u)}
-	case u <= 0xFFFF:
-		return []byte{major<<5 | infoUint16, uint8(u >> 8), uint8(u)}
-	case u <= 0xFFFFFFFF:
-		return []byte{major<<5 | infoUint32, uint8(u >> 24), uint8(u >> 16), uint8(u >> 8), uint8(u)}
-	default:
-		return []byte{major<<5 | infoUint64, uint8(u >> 56), uint8(u >> 48), uint8(u >> 40), uint8(u >> 32), uint8(u >> 24), uint8(u >> 16), uint8(u >> 8), uint8(u)}
+	if major != majorBytes {
+		return nil, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorBytes)
 	}
+	// Check that the length matches the expected array size
+	if int(length) != n {
+		return nil, fmt.Errorf("%w: %d, want %d", ErrUnexpectedItemCount, length, n)
+	}
+	// Retrieve the bytes and copy into the fixed-size array
+	bytes, err := d.readBytes(length)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]byte, n)
+	copy(result, bytes)
+	return result, nil
 }
 
-// decodeHeader extracts the major type and the integer value.
-func (v *verifier) decodeHeader() (uint8, uint64, error) {
+// DecodeText decodes a UTF-8 text string.
+func (d *Decoder) DecodeText() (string, error) {
+	// Extract the field type and attached length
+	major, length, err := d.decodeHeader()
+	if err != nil {
+		return "", err
+	}
+	if major != majorText {
+		return "", fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorText)
+	}
+	// Retrieve the blob and reinterpret as UTF-8
+	bytes, err := d.readBytes(length)
+	if err != nil {
+		return "", err
+	}
+	if !utf8.Valid(bytes) {
+		return "", ErrInvalidUTF8
+	}
+	return string(bytes), nil
+}
+
+// DecodeArrayHeader decodes an array header, returning its length.
+func (d *Decoder) DecodeArrayHeader() (uint64, error) {
+	// Extract the field type and attached length
+	major, length, err := d.decodeHeader()
+	if err != nil {
+		return 0, err
+	}
+	if major != majorArray {
+		return 0, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorArray)
+	}
+	return length, nil
+}
+
+// DecodeMapHeader decodes a map header, returning the number of key-value pairs.
+func (d *Decoder) DecodeMapHeader() (uint64, error) {
+	// Extract the field type and attached length
+	major, length, err := d.decodeHeader()
+	if err != nil {
+		return 0, err
+	}
+	if major != majorMap {
+		return 0, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorMap)
+	}
+	return length, nil
+}
+
+// decodeHeader extracts the major type and the integer value embedded as additional info.
+func (d *Decoder) decodeHeader() (uint8, uint64, error) {
 	// Ensure there's still data left in the buffer
-	if v.pos >= len(v.data) {
+	if d.pos >= len(d.data) {
 		return 0, 0, ErrUnexpectedEOF
 	}
 	// Extract the type byte and split it apart
-	b := v.data[v.pos]
-	v.pos++
+	b := d.data[d.pos]
+	d.pos++
 
 	major := b >> 5
 	info := b & 0x1f
@@ -286,35 +301,30 @@ func (v *verifier) decodeHeader() (uint8, uint64, error) {
 	switch {
 	case info <= 23:
 		value = uint64(info)
-
 	case info == infoUint8:
-		bytes, err := v.readBytes(1)
+		bytes, err := d.readBytes(1)
 		if err != nil {
 			return 0, 0, err
 		}
 		value = uint64(bytes[0])
-
 	case info == infoUint16:
-		bytes, err := v.readBytes(2)
+		bytes, err := d.readBytes(2)
 		if err != nil {
 			return 0, 0, err
 		}
 		value = uint64(binary.BigEndian.Uint16(bytes))
-
 	case info == infoUint32:
-		bytes, err := v.readBytes(4)
+		bytes, err := d.readBytes(4)
 		if err != nil {
 			return 0, 0, err
 		}
 		value = uint64(binary.BigEndian.Uint32(bytes))
-
 	case info == infoUint64:
-		bytes, err := v.readBytes(8)
+		bytes, err := d.readBytes(8)
 		if err != nil {
 			return 0, 0, err
 		}
 		value = binary.BigEndian.Uint64(bytes)
-
 	default:
 		return 0, 0, fmt.Errorf("%w: %d", ErrInvalidAdditionalInfo, info)
 	}
@@ -339,16 +349,101 @@ func (v *verifier) decodeHeader() (uint8, uint64, error) {
 }
 
 // readBytes retrieves the next n bytes from the buffer.
-func (v *verifier) readBytes(n uint64) ([]byte, error) {
-	// Ensure there's still enough data left in the buffer
+func (d *Decoder) readBytes(n uint64) ([]byte, error) {
+	// Ensure n fits in an int to avoid overflow during position arithmetic
 	if n > uint64(maxInt) {
 		return nil, ErrUnexpectedEOF
 	}
-	if int(n) > len(v.data)-v.pos {
+	// Ensure there's still enough data left in the buffer
+	if int(n) > len(d.data)-d.pos {
 		return nil, ErrUnexpectedEOF
 	}
 	// Retrieve the byte and move the cursor forward
-	bytes := v.data[v.pos : v.pos+int(n)]
-	v.pos += int(n)
+	bytes := d.data[d.pos : d.pos+int(n)]
+	d.pos += int(n)
 	return bytes, nil
+}
+
+// mapKeyCmp compares two int64 keys according to CBOR deterministic encoding
+// order (RFC 8949 Section 4.2.1): bytewise lexicographic order of encoded keys.
+//
+// For integers this means: positive integers (0, 1, 2, ...) come before negative
+// integers (-1, -2, -3, ...), and within each category they're ordered by their
+// encoded length first, then by value.
+func mapKeyCmp(a, b int64) int {
+	encodeKey := func(k int64) []byte {
+		enc := NewEncoder()
+		enc.EncodeInt(k)
+		return enc.Bytes()
+	}
+	return slices.Compare(encodeKey(a), encodeKey(b))
+}
+
+// Verify does a dry-run decoding to verify that only the tiny, strict subset
+// of types permitted by this package were used.
+func Verify(data []byte) error {
+	dec := NewDecoder(data)
+	if err := verifyObject(dec); err != nil {
+		return err
+	}
+	return dec.Finish()
+}
+
+// verifyObject verifies a single CBOR item without full deserialization.
+func verifyObject(dec *Decoder) error {
+	major, value, err := dec.decodeHeader()
+	if err != nil {
+		return err
+	}
+	switch major {
+	case majorUint, majorNint:
+		// Integers are valid (canonicalness was already verified in header decoding)
+		return nil
+
+	case majorBytes:
+		// Opaque bytes are always valid, skip over
+		_, err := dec.readBytes(value)
+		return err
+
+	case majorText:
+		// Verify that the text is indeed UTF-8
+		bytes, err := dec.readBytes(value)
+		if err != nil {
+			return err
+		}
+		if !utf8.Valid(bytes) {
+			return ErrInvalidUTF8
+		}
+		return nil
+
+	case majorArray:
+		// Recursively verify each array element
+		for range value {
+			if err := verifyObject(dec); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case majorMap:
+		// Verify map has integer keys in deterministic order
+		var prevKey *int64
+		for range value {
+			key, err := dec.DecodeInt()
+			if err != nil {
+				return err
+			}
+			if prevKey != nil && mapKeyCmp(*prevKey, key) >= 0 {
+				return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, key, *prevKey)
+			}
+			prevKey = &key
+			if err := verifyObject(dec); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	default:
+		return fmt.Errorf("%w: major type %d", ErrUnsupportedType, major)
+	}
 }

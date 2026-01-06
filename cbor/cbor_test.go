@@ -13,148 +13,645 @@ import (
 	"testing"
 )
 
-func TestMarshalUnmarshalUint64(t *testing.T) {
-	cases := []uint64{0, 1, 23, 24, 255, 256, 65535, 65536, math.MaxUint32, math.MaxUint64}
-	for _, v := range cases {
-		data, err := Marshal(v)
+// Tests that positive integers encode correctly across the various ranges
+// that CBOR special cases.
+func TestUintEncoding(t *testing.T) {
+	cases := []struct {
+		value    uint64
+		expected []byte
+	}{
+		{0, []byte{0x00}},
+		{23, []byte{0x17}},
+		{24, []byte{0x18, 0x18}},
+		{math.MaxUint8, []byte{0x18, 0xff}},
+		{math.MaxUint8 + 1, []byte{0x19, 0x01, 0x00}},
+		{math.MaxUint16, []byte{0x19, 0xff, 0xff}},
+		{math.MaxUint16 + 1, []byte{0x1a, 0x00, 0x01, 0x00, 0x00}},
+		{math.MaxUint32, []byte{0x1a, 0xff, 0xff, 0xff, 0xff}},
+		{math.MaxUint32 + 1, []byte{0x1b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00}},
+		{math.MaxUint64, []byte{0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}},
+	}
+	for _, tc := range cases {
+		data, err := Marshal(tc.value)
 		if err != nil {
-			t.Errorf("Marshal(%d) error: %v", v, err)
+			t.Errorf("Marshal(%d) error: %v", tc.value, err)
 			continue
 		}
+		if !bytes.Equal(data, tc.expected) {
+			t.Errorf("encoding failed for value %d: got %x, want %x", tc.value, data, tc.expected)
+		}
+	}
+}
+
+// Tests that positive integers decode correctly across the various ranges
+// that CBOR special cases.
+func TestUintDecoding(t *testing.T) {
+	cases := []struct {
+		data     []byte
+		expected uint64
+	}{
+		{[]byte{0x00}, 0},
+		{[]byte{0x17}, 23},
+		{[]byte{0x18, 0x18}, 24},
+		{[]byte{0x18, 0xff}, math.MaxUint8},
+		{[]byte{0x19, 0x01, 0x00}, math.MaxUint8 + 1},
+		{[]byte{0x19, 0xff, 0xff}, math.MaxUint16},
+		{[]byte{0x1a, 0x00, 0x01, 0x00, 0x00}, math.MaxUint16 + 1},
+		{[]byte{0x1a, 0xff, 0xff, 0xff, 0xff}, math.MaxUint32},
+		{[]byte{0x1b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00}, math.MaxUint32 + 1},
+		{[]byte{0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, math.MaxUint64},
+	}
+	for _, tc := range cases {
 		var got uint64
-		if err := Unmarshal(data, &got); err != nil {
-			t.Errorf("Unmarshal(%d) error: %v", v, err)
+		if err := Unmarshal(tc.data, &got); err != nil {
+			t.Errorf("Unmarshal(%x) error: %v", tc.data, err)
 			continue
 		}
-		if got != v {
-			t.Errorf("roundtrip %d: got %d", v, got)
+		if got != tc.expected {
+			t.Errorf("decoding failed for data %x: got %d, want %d", tc.data, got, tc.expected)
 		}
 	}
 }
 
-func TestMarshalUnmarshalInt64(t *testing.T) {
-	cases := []int64{0, 1, -1, 23, 24, -24, -25, 255, -256, math.MaxInt64, math.MinInt64}
-	for _, v := range cases {
-		data, err := Marshal(v)
+// Tests that positive integers are rejected for invalid size / encoding
+// combinations.
+func TestUintRejection(t *testing.T) {
+	// Values 0-23 must use direct embedding
+	for value := uint64(0); value < 24; value++ {
+		// Should fail with infoUint8
+		data := []byte{majorUint<<5 | infoUint8, byte(value)}
+		var got uint64
+		if err := Unmarshal(data, &got); err == nil {
+			t.Errorf("value %d with infoUint8 should fail", value)
+		}
+
+		// Should fail with infoUint16
+		data = []byte{majorUint<<5 | infoUint16, 0, byte(value)}
+		if err := Unmarshal(data, &got); err == nil {
+			t.Errorf("value %d with infoUint16 should fail", value)
+		}
+
+		// Should fail with infoUint32
+		data = []byte{majorUint<<5 | infoUint32, 0, 0, 0, byte(value)}
+		if err := Unmarshal(data, &got); err == nil {
+			t.Errorf("value %d with infoUint32 should fail", value)
+		}
+
+		// Should fail with infoUint64
+		data = []byte{majorUint<<5 | infoUint64, 0, 0, 0, 0, 0, 0, 0, byte(value)}
+		if err := Unmarshal(data, &got); err == nil {
+			t.Errorf("value %d with infoUint64 should fail", value)
+		}
+	}
+
+	// Values 24-255 must use infoUint8
+	for value := uint64(24); value <= math.MaxUint8; value++ {
+		var got uint64
+
+		// Should fail with infoUint16
+		data := []byte{majorUint<<5 | infoUint16, 0, byte(value)}
+		if err := Unmarshal(data, &got); err == nil {
+			t.Errorf("value %d with infoUint16 should fail", value)
+		}
+
+		// Should fail with infoUint32
+		data = []byte{majorUint<<5 | infoUint32, 0, 0, 0, byte(value)}
+		if err := Unmarshal(data, &got); err == nil {
+			t.Errorf("value %d with infoUint32 should fail", value)
+		}
+
+		// Should fail with infoUint64
+		data = []byte{majorUint<<5 | infoUint64, 0, 0, 0, 0, 0, 0, 0, byte(value)}
+		if err := Unmarshal(data, &got); err == nil {
+			t.Errorf("value %d with infoUint64 should fail", value)
+		}
+	}
+
+	// Values 256-65535 must use infoUint16
+	for _, value := range []uint64{math.MaxUint8 + 1, math.MaxUint16} {
+		var got uint64
+
+		// Should fail with infoUint32
+		data := []byte{majorUint<<5 | infoUint32, 0, 0, byte(value >> 8), byte(value)}
+		if err := Unmarshal(data, &got); err == nil {
+			t.Errorf("value %d with infoUint32 should fail", value)
+		}
+
+		// Should fail with infoUint64
+		data = []byte{majorUint<<5 | infoUint64, 0, 0, 0, 0, 0, 0, byte(value >> 8), byte(value)}
+		if err := Unmarshal(data, &got); err == nil {
+			t.Errorf("value %d with infoUint64 should fail", value)
+		}
+	}
+
+	// Values 65536-4294967295 must use infoUint32
+	for _, value := range []uint64{math.MaxUint16 + 1, math.MaxUint32} {
+		var got uint64
+
+		// Should fail with infoUint64
+		data := []byte{majorUint<<5 | infoUint64, 0, 0, 0, 0, byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)}
+		if err := Unmarshal(data, &got); err == nil {
+			t.Errorf("value %d with infoUint64 should fail", value)
+		}
+	}
+}
+
+// Tests that signed integers encode correctly across the various ranges.
+func TestIntEncoding(t *testing.T) {
+	cases := []struct {
+		value    int64
+		expected []byte
+	}{
+		// Positive values use major type 0
+		{0, []byte{0x00}},
+		{23, []byte{0x17}},
+		{24, []byte{0x18, 0x18}},
+		{math.MaxInt64, []byte{0x1b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}},
+		// Negative values use major type 1 with (-1 - n) encoding
+		{-1, []byte{0x20}},               // -1 -> wire value 0
+		{-24, []byte{0x37}},              // -24 -> wire value 23
+		{-25, []byte{0x38, 0x18}},        // -25 -> wire value 24
+		{-256, []byte{0x38, 0xff}},       // -256 -> wire value 255
+		{-257, []byte{0x39, 0x01, 0x00}}, // -257 -> wire value 256
+		{math.MinInt64, []byte{0x3b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}},
+	}
+	for _, tc := range cases {
+		data, err := Marshal(tc.value)
 		if err != nil {
-			t.Errorf("Marshal(%d) error: %v", v, err)
+			t.Errorf("Marshal(%d) error: %v", tc.value, err)
 			continue
 		}
+		if !bytes.Equal(data, tc.expected) {
+			t.Errorf("encoding failed for value %d: got %x, want %x", tc.value, data, tc.expected)
+		}
+	}
+}
+
+// Tests that signed integers decode correctly across the various ranges.
+func TestIntDecoding(t *testing.T) {
+	cases := []struct {
+		data     []byte
+		expected int64
+	}{
+		// Positive values (major type 0)
+		{[]byte{0x00}, 0},
+		{[]byte{0x17}, 23},
+		{[]byte{0x18, 0x18}, 24},
+		{[]byte{0x1b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, math.MaxInt64},
+		// Negative values (major type 1)
+		{[]byte{0x20}, -1},
+		{[]byte{0x37}, -24},
+		{[]byte{0x38, 0x18}, -25},
+		{[]byte{0x38, 0xff}, -256},
+		{[]byte{0x39, 0x01, 0x00}, -257},
+		{[]byte{0x3b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}, math.MinInt64},
+	}
+	for _, tc := range cases {
 		var got int64
-		if err := Unmarshal(data, &got); err != nil {
-			t.Errorf("Unmarshal(%d) error: %v", v, err)
+		if err := Unmarshal(tc.data, &got); err != nil {
+			t.Errorf("Unmarshal(%x) error: %v", tc.data, err)
 			continue
 		}
-		if got != v {
-			t.Errorf("roundtrip %d: got %d", v, got)
+		if got != tc.expected {
+			t.Errorf("decoding failed for data %x: got %d, want %d", tc.data, got, tc.expected)
 		}
 	}
 }
 
-func TestMarshalUnmarshalBytes(t *testing.T) {
-	cases := [][]byte{{}, {0}, {1, 2, 3}, make([]byte, 256)}
-	for _, v := range cases {
-		data, err := Marshal(v)
-		if err != nil {
-			t.Errorf("Marshal(%x) error: %v", v, err)
-			continue
-		}
-		var got []byte
-		if err := Unmarshal(data, &got); err != nil {
-			t.Errorf("Unmarshal(%x) error: %v", v, err)
-			continue
-		}
-		if !bytes.Equal(got, v) {
-			t.Errorf("roundtrip %x: got %x", v, got)
-		}
-	}
-}
-
-func TestMarshalUnmarshalString(t *testing.T) {
-	cases := []string{"", "hello", "日本語", "🎉"}
-	for _, v := range cases {
-		data, err := Marshal(v)
-		if err != nil {
-			t.Errorf("Marshal(%q) error: %v", v, err)
-			continue
-		}
-		var got string
-		if err := Unmarshal(data, &got); err != nil {
-			t.Errorf("Unmarshal(%q) error: %v", v, err)
-			continue
-		}
-		if got != v {
-			t.Errorf("roundtrip %q: got %q", v, got)
-		}
-	}
-}
-
-func TestMarshalStructRejectsStringKeys(t *testing.T) {
-	// Structs encode field names as string keys, which are not permitted
-	// in our restricted CBOR subset (integer keys only).
-	type Simple struct {
-		Value uint64
-	}
-	_, err := Marshal(Simple{Value: 42})
+// Tests that signed integers are rejected for overflow conditions.
+func TestIntRejection(t *testing.T) {
+	// Positive value > i64::MAX (major type 0 with value i64::MAX + 1)
+	data := []byte{majorUint<<5 | infoUint64, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	var got int64
+	err := Unmarshal(data, &got)
 	if err == nil {
-		t.Fatal("Marshal should reject struct (string keys)")
+		t.Error("positive overflow should fail")
+	} else if !errors.Is(err, ErrIntegerOverflow) {
+		t.Errorf("expected ErrIntegerOverflow, got %v", err)
+	}
+
+	// Negative value < i64::MIN (major type 1 with wire value > i64::MAX)
+	data = []byte{majorNint<<5 | infoUint64, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	err = Unmarshal(data, &got)
+	if err == nil {
+		t.Error("negative overflow should fail")
+	} else if !errors.Is(err, ErrIntegerOverflow) {
+		t.Errorf("expected ErrIntegerOverflow, got %v", err)
+	}
+
+	// Non-canonical negative integer encoding
+	data = []byte{majorNint<<5 | infoUint8, 0x10} // -17 with infoUint8
+	err = Unmarshal(data, &got)
+	if err == nil {
+		t.Error("non-canonical encoding should fail")
+	} else if !errors.Is(err, ErrNonCanonical) {
+		t.Errorf("expected ErrNonCanonical, got %v", err)
 	}
 }
 
-func TestMarshalNestedArrays(t *testing.T) {
-	// Test nested arrays (slices) which are valid
-	original := [][]int64{{1, 2, 3}, {-1, -2}}
-	data, err := Marshal(original)
+// Tests that byte strings encode correctly on a bunch of samples.
+func TestBytesEncoding(t *testing.T) {
+	// Empty bytes
+	data, err := Marshal([]byte{})
+	if err != nil {
+		t.Fatalf("Marshal empty bytes error: %v", err)
+	}
+	if !bytes.Equal(data, []byte{0x40}) {
+		t.Errorf("empty bytes: got %x, want 40", data)
+	}
+
+	// 1 byte
+	data, err = Marshal([]byte{0xaa})
+	if err != nil {
+		t.Fatalf("Marshal 1 byte error: %v", err)
+	}
+	if !bytes.Equal(data, []byte{0x41, 0xaa}) {
+		t.Errorf("1 byte: got %x, want 41aa", data)
+	}
+
+	// Longer bytes
+	data, err = Marshal([]byte{0xde, 0xad, 0xbe, 0xef})
+	if err != nil {
+		t.Fatalf("Marshal longer bytes error: %v", err)
+	}
+	if !bytes.Equal(data, []byte{0x44, 0xde, 0xad, 0xbe, 0xef}) {
+		t.Errorf("longer bytes: got %x, want 44deadbeef", data)
+	}
+
+	// Test [N]byte fixed-size array
+	data, err = Marshal([3]byte{7, 8, 9})
+	if err != nil {
+		t.Fatalf("Marshal [3]byte error: %v", err)
+	}
+	if !bytes.Equal(data, []byte{0x43, 7, 8, 9}) {
+		t.Errorf("[3]byte: got %x, want 43070809", data)
+	}
+}
+
+// Tests that byte strings decode correctly on a bunch of samples.
+func TestBytesDecoding(t *testing.T) {
+	// Empty bytes
+	var got []byte
+	if err := Unmarshal([]byte{0x40}, &got); err != nil {
+		t.Fatalf("Unmarshal empty bytes error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("empty bytes: got %x, want empty", got)
+	}
+
+	// 1 byte
+	if err := Unmarshal([]byte{0x41, 0xaa}, &got); err != nil {
+		t.Fatalf("Unmarshal 1 byte error: %v", err)
+	}
+	if !bytes.Equal(got, []byte{0xaa}) {
+		t.Errorf("1 byte: got %x, want aa", got)
+	}
+
+	// Longer bytes
+	if err := Unmarshal([]byte{0x44, 0xde, 0xad, 0xbe, 0xef}, &got); err != nil {
+		t.Fatalf("Unmarshal longer bytes error: %v", err)
+	}
+	if !bytes.Equal(got, []byte{0xde, 0xad, 0xbe, 0xef}) {
+		t.Errorf("longer bytes: got %x, want deadbeef", got)
+	}
+
+	// Test fixed-size array decoding
+	var fixed [3]byte
+	if err := Unmarshal([]byte{0x43, 1, 2, 3}, &fixed); err != nil {
+		t.Fatalf("Unmarshal [3]byte error: %v", err)
+	}
+	if fixed != [3]byte{1, 2, 3} {
+		t.Errorf("[3]byte: got %x, want 010203", fixed)
+	}
+
+	// Test empty fixed-size array
+	var empty [0]byte
+	if err := Unmarshal([]byte{0x40}, &empty); err != nil {
+		t.Fatalf("Unmarshal [0]byte error: %v", err)
+	}
+}
+
+// Tests that bytes decoding fails when fixed size lengths don't match.
+func TestBytesRejection(t *testing.T) {
+	// Try to decode 3 bytes into a 4-byte array
+	var arr4 [4]byte
+	err := Unmarshal([]byte{0x43, 1, 2, 3}, &arr4)
+	if err == nil {
+		t.Error("decoding 3 bytes into [4]byte should fail")
+	} else if !errors.Is(err, ErrUnexpectedItemCount) {
+		t.Errorf("expected ErrUnexpectedItemCount, got %v", err)
+	}
+
+	// Try to decode 4 bytes into a 2-byte array
+	var arr2 [2]byte
+	err = Unmarshal([]byte{0x44, 1, 2, 3, 4}, &arr2)
+	if err == nil {
+		t.Error("decoding 4 bytes into [2]byte should fail")
+	} else if !errors.Is(err, ErrUnexpectedItemCount) {
+		t.Errorf("expected ErrUnexpectedItemCount, got %v", err)
+	}
+}
+
+// Tests that UTF-8 strings encode correctly on a bunch of samples.
+func TestStringEncoding(t *testing.T) {
+	// Empty string
+	data, err := Marshal("")
+	if err != nil {
+		t.Fatalf("Marshal empty string error: %v", err)
+	}
+	if !bytes.Equal(data, []byte{0x60}) {
+		t.Errorf("empty string: got %x, want 60", data)
+	}
+
+	// 1 character
+	data, err = Marshal("a")
+	if err != nil {
+		t.Fatalf("Marshal 1 char error: %v", err)
+	}
+	if !bytes.Equal(data, []byte{0x61, 0x61}) {
+		t.Errorf("1 char: got %x, want 6161", data)
+	}
+
+	// Longer string
+	testStr := "Peter says hi!"
+	data, err = Marshal(testStr)
+	if err != nil {
+		t.Fatalf("Marshal longer string error: %v", err)
+	}
+	expected := append([]byte{0x60 | byte(len(testStr))}, []byte(testStr)...)
+	if !bytes.Equal(data, expected) {
+		t.Errorf("longer string: got %x, want %x", data, expected)
+	}
+}
+
+// Tests that UTF-8 strings decode correctly on a bunch of samples.
+func TestStringDecoding(t *testing.T) {
+	// Empty string
+	var got string
+	if err := Unmarshal([]byte{0x60}, &got); err != nil {
+		t.Fatalf("Unmarshal empty string error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("empty string: got %q, want empty", got)
+	}
+
+	// 1 character
+	if err := Unmarshal([]byte{0x61, 0x61}, &got); err != nil {
+		t.Fatalf("Unmarshal 1 char error: %v", err)
+	}
+	if got != "a" {
+		t.Errorf("1 char: got %q, want 'a'", got)
+	}
+
+	// Longer string
+	testStr := "Peter says hi!"
+	encoded := append([]byte{0x60 | byte(len(testStr))}, []byte(testStr)...)
+	if err := Unmarshal(encoded, &got); err != nil {
+		t.Fatalf("Unmarshal longer string error: %v", err)
+	}
+	if got != testStr {
+		t.Errorf("longer string: got %q, want %q", got, testStr)
+	}
+}
+
+// Tests that UTF-8 strings are rejected if containing invalid data.
+func TestStringRejection(t *testing.T) {
+	// 0xff is not valid UTF-8
+	var got string
+	err := Unmarshal([]byte{0x61, 0xff}, &got)
+	if err == nil {
+		t.Error("invalid UTF-8 should fail")
+	} else if !errors.Is(err, ErrInvalidUTF8) {
+		t.Errorf("expected ErrInvalidUTF8, got %v", err)
+	}
+
+	// Incomplete multi-byte sequence
+	err = Unmarshal([]byte{0x62, 0xc2, 0x00}, &got)
+	if err == nil {
+		t.Error("incomplete UTF-8 should fail")
+	} else if !errors.Is(err, ErrInvalidUTF8) {
+		t.Errorf("expected ErrInvalidUTF8, got %v", err)
+	}
+}
+
+// Tests that array structs encode correctly in field declaration order.
+func TestArrayEncoding(t *testing.T) {
+	type TestArray struct {
+		_      struct{} `cbor:"_,array"`
+		First  uint64
+		Second string
+		Third  []byte
+	}
+	arr := TestArray{First: 42, Second: "hello", Third: []byte{1, 2, 3}}
+	encoded, err := Marshal(arr)
 	if err != nil {
 		t.Fatalf("Marshal error: %v", err)
 	}
 
-	var decoded [][]int64
+	// Should be: [42, "hello", h'010203']
+	expected := []byte{0x83} // array with 3 elements
+	uint42, _ := Marshal(uint64(42))
+	hello, _ := Marshal("hello")
+	bytes123, _ := Marshal([]byte{1, 2, 3})
+	expected = append(expected, uint42...)
+	expected = append(expected, hello...)
+	expected = append(expected, bytes123...)
+
+	if !bytes.Equal(encoded, expected) {
+		t.Errorf("encoding mismatch: got %x, want %x", encoded, expected)
+	}
+}
+
+// Tests that array structs decode correctly.
+func TestArrayDecoding(t *testing.T) {
+	type TestArray struct {
+		_      struct{} `cbor:"_,array"`
+		First  uint64
+		Second string
+		Third  []byte
+	}
+
+	data := []byte{0x83} // array with 3 elements
+	uint100, _ := Marshal(uint64(100))
+	world, _ := Marshal("world")
+	bytes456, _ := Marshal([]byte{4, 5, 6})
+	data = append(data, uint100...)
+	data = append(data, world...)
+	data = append(data, bytes456...)
+
+	var decoded TestArray
 	if err := Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
-
-	if len(decoded) != 2 || len(decoded[0]) != 3 || decoded[0][0] != 1 || decoded[1][1] != -2 {
-		t.Errorf("Nested arrays mismatch: got %v", decoded)
+	if decoded.First != 100 {
+		t.Errorf("First: got %d, want 100", decoded.First)
+	}
+	if decoded.Second != "world" {
+		t.Errorf("Second: got %q, want 'world'", decoded.Second)
+	}
+	if !bytes.Equal(decoded.Third, []byte{4, 5, 6}) {
+		t.Errorf("Third: got %x, want 040506", decoded.Third)
 	}
 }
 
-func TestMarshalMapRejectsStringKeys(t *testing.T) {
-	// String-keyed maps are not permitted in our restricted CBOR subset.
-	original := map[string]uint64{"a": 1, "b": 2}
-	_, err := Marshal(original)
+// Tests that array structs are rejected if the size does not match.
+func TestArrayRejection(t *testing.T) {
+	type TestArray struct {
+		_      struct{} `cbor:"_,array"`
+		First  uint64
+		Second string
+		Third  []byte
+	}
+
+	// Too few elements (2 instead of 3)
+	data := []byte{0x82} // array with 2 elements
+	uint42, _ := Marshal(uint64(42))
+	test, _ := Marshal("test")
+	data = append(data, uint42...)
+	data = append(data, test...)
+
+	var decoded TestArray
+	err := Unmarshal(data, &decoded)
 	if err == nil {
-		t.Fatal("Marshal should reject map[string]... (string keys)")
+		t.Error("too few elements should fail")
+	} else if !errors.Is(err, ErrUnexpectedItemCount) {
+		t.Errorf("expected ErrUnexpectedItemCount, got %v", err)
+	}
+
+	// Too many elements (4 instead of 3)
+	data = []byte{0x84} // array with 4 elements
+	bytes1, _ := Marshal([]byte{1})
+	data = append(data, uint42...)
+	data = append(data, test...)
+	data = append(data, bytes1...)
+	data = append(data, uint42...)
+
+	err = Unmarshal(data, &decoded)
+	if err == nil {
+		t.Error("too many elements should fail")
+	} else if !errors.Is(err, ErrUnexpectedItemCount) {
+		t.Errorf("expected ErrUnexpectedItemCount, got %v", err)
 	}
 }
 
-func TestMarshalUnmarshalIntKeyMap(t *testing.T) {
-	original := map[int64]string{1: "one", 2: "two", -1: "neg"}
-
-	data, err := Marshal(original)
+// Tests that maps encode correctly with deterministic key ordering.
+func TestMapEncoding(t *testing.T) {
+	// Map with positive and negative keys (should be sorted by bytewise order)
+	type TestMap struct {
+		Key1    uint64 `cbor:"1,key"`
+		Key2    uint64 `cbor:"2,key"`
+		KeyNeg1 uint64 `cbor:"-1,key"`
+	}
+	m := TestMap{Key1: 42, Key2: 67, KeyNeg1: 100}
+	encoded, err := Marshal(m)
 	if err != nil {
 		t.Fatalf("Marshal error: %v", err)
 	}
 
-	var decoded map[int64]string
-	if err := Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal error: %v", err)
+	// Keys in bytewise order: 0x01, 0x02, 0x20 (1, 2, -1)
+	if encoded[0] != 0xa3 {
+		t.Errorf("expected map header 0xa3, got %x", encoded[0])
 	}
-
-	if decoded[1] != "one" || decoded[2] != "two" || decoded[-1] != "neg" {
-		t.Errorf("Map mismatch: got %v", decoded)
+	if encoded[1] != 0x01 {
+		t.Errorf("expected key 1 (0x01), got %x", encoded[1])
+	}
+	if encoded[2] != 0x18 || encoded[3] != 42 {
+		t.Errorf("expected value 42, got %x %x", encoded[2], encoded[3])
+	}
+	if encoded[4] != 0x02 {
+		t.Errorf("expected key 2 (0x02), got %x", encoded[4])
+	}
+	if encoded[5] != 0x18 || encoded[6] != 67 {
+		t.Errorf("expected value 67, got %x %x", encoded[5], encoded[6])
+	}
+	if encoded[7] != 0x20 {
+		t.Errorf("expected key -1 (0x20), got %x", encoded[7])
+	}
+	if encoded[8] != 0x18 || encoded[9] != 100 {
+		t.Errorf("expected value 100, got %x %x", encoded[8], encoded[9])
 	}
 }
 
+// Tests that maps decode correctly.
+func TestMapDecoding(t *testing.T) {
+	type TestMap struct {
+		Key1    uint64 `cbor:"1,key"`
+		Key2    uint64 `cbor:"2,key"`
+		KeyNeg1 uint64 `cbor:"-1,key"`
+	}
+
+	// Multiple entries (in correct deterministic order)
+	data := []byte{
+		0xa3,             // map with 3 entries
+		0x01, 0x18, 0x2a, // 1: 42
+		0x02, 0x18, 0x43, // 2: 67
+		0x20, 0x18, 0x64, // -1: 100
+	}
+
+	var decoded TestMap
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if decoded.Key1 != 42 {
+		t.Errorf("Key1: got %d, want 42", decoded.Key1)
+	}
+	if decoded.Key2 != 67 {
+		t.Errorf("Key2: got %d, want 67", decoded.Key2)
+	}
+	if decoded.KeyNeg1 != 100 {
+		t.Errorf("KeyNeg1: got %d, want 100", decoded.KeyNeg1)
+	}
+}
+
+// Tests that maps with invalid key ordering are rejected.
+func TestMapRejection(t *testing.T) {
+	type TestMap struct {
+		Key1    uint64 `cbor:"1,key"`
+		Key2    uint64 `cbor:"2,key"`
+		KeyNeg1 uint64 `cbor:"-1,key"`
+	}
+
+	// Keys out of order: 2 before 1
+	data := []byte{
+		0xa3,             // map with 3 entries
+		0x02, 0x18, 0x43, // 2: 67 (should come after 1)
+		0x01, 0x18, 0x2a, // 1: 42
+		0x20, 0x18, 0x64, // -1: 100
+	}
+
+	var decoded TestMap
+	if err := Unmarshal(data, &decoded); err == nil {
+		t.Error("out of order keys should fail")
+	}
+
+	// Wrong key value
+	data = []byte{
+		0xa3,             // map with 3 entries
+		0x05, 0x18, 0x2a, // 5: 42 (should be 1)
+		0x02, 0x18, 0x43, // 2: 67
+		0x20, 0x18, 0x64, // -1: 100
+	}
+
+	if err := Unmarshal(data, &decoded); err == nil {
+		t.Error("wrong key value should fail")
+	}
+}
+
+// Tests that the dry-decoding verifier properly restricts the allowed types.
 func TestVerify(t *testing.T) {
+	type TestMap struct {
+		Key1    uint64 `cbor:"1,key"`
+		Key2    uint64 `cbor:"2,key"`
+		KeyNeg1 uint64 `cbor:"-1,key"`
+	}
+
 	// Valid types should pass
 	validCases := []any{
 		uint64(42),
 		int64(-42),
 		"hello",
 		[]byte{1, 2, 3},
-		[]int{1, 2, 3},
-		map[int64]int{1: 1, 2: 2}, // integer keys only
+		TestMap{Key1: 1, Key2: 2, KeyNeg1: 3}, // integer keys via struct tags
 	}
 	for _, v := range validCases {
 		data, err := Marshal(v)
@@ -167,10 +664,15 @@ func TestVerify(t *testing.T) {
 		}
 	}
 
-	// String-keyed maps should be rejected
-	stringKeyMap := []byte{0xa1, 0x61, 0x61, 0x01} // {"a": 1}
-	if err := Verify(stringKeyMap); err == nil {
-		t.Error("Verify should reject string map keys")
+	// Large integers are valid at verify time (overflow is checked at decode)
+	largeUint := append([]byte{majorUint<<5 | infoUint64}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}...)
+	if err := Verify(largeUint); err != nil {
+		t.Errorf("Verify large uint should pass, got %v", err)
+	}
+
+	largeNint := append([]byte{majorNint<<5 | infoUint64}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}...)
+	if err := Verify(largeNint); err != nil {
+		t.Errorf("Verify large nint should pass, got %v", err)
 	}
 
 	// Trailing bytes
@@ -180,14 +682,22 @@ func TestVerify(t *testing.T) {
 		t.Errorf("Verify with trailing bytes: expected ErrTrailingBytes, got %v", err)
 	}
 
+	// Maps with string keys are rejected (key decoding fails)
+	mapStrKey := []byte{0xa1, 0x61, 0x61, 0x61, 0x62} // {"a": "b"}
+	err := Verify(mapStrKey)
+	if err == nil {
+		t.Error("Verify should reject string map keys")
+	} else if !errors.Is(err, ErrInvalidMajorType) {
+		t.Errorf("Expected ErrInvalidMajorType error for string key, got %v", err)
+	}
+
 	// Major type 6 (tags) - unsupported
-	taggedData := []byte{0xc0, 0x74, 0x32, 0x30, 0x31, 0x33}
-	err := Verify(taggedData)
-	if !errors.Is(err, ErrUnsupportedType) {
+	taggedData := []byte{0xc0, 0x74, 0x32, 0x30, 0x31, 0x33, 0x2d, 0x30, 0x33, 0x2d, 0x32, 0x31, 0x54, 0x32, 0x30, 0x3a, 0x30, 0x34, 0x3a, 0x30, 0x30, 0x5a}
+	if err := Verify(taggedData); !errors.Is(err, ErrUnsupportedType) {
 		t.Errorf("Verify tagged: expected ErrUnsupportedType, got %v", err)
 	}
 
-	// Major type 7 (floats/booleans/null) - unsupported
+	// Major type 7 (floats/booleans/null/undefined) - unsupported
 	for _, tc := range []struct {
 		name string
 		data []byte
@@ -200,8 +710,7 @@ func TestVerify(t *testing.T) {
 		{"float32", []byte{0xfa, 0x3f, 0x80, 0x00, 0x00}},
 		{"float64", []byte{0xfb, 0x3f, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
 	} {
-		err := Verify(tc.data)
-		if !errors.Is(err, ErrUnsupportedType) {
+		if err := Verify(tc.data); !errors.Is(err, ErrUnsupportedType) {
 			t.Errorf("Verify %s: expected ErrUnsupportedType, got %v", tc.name, err)
 		}
 	}
@@ -220,8 +729,7 @@ func TestVerify(t *testing.T) {
 
 	// Nested arrays with invalid content
 	nestedInvalid := []byte{0x81, 0xf4} // [false]
-	err = Verify(nestedInvalid)
-	if !errors.Is(err, ErrUnsupportedType) {
+	if err := Verify(nestedInvalid); !errors.Is(err, ErrUnsupportedType) {
 		t.Errorf("Verify nested invalid: expected ErrUnsupportedType, got %v", err)
 	}
 
@@ -233,39 +741,7 @@ func TestVerify(t *testing.T) {
 
 	// Invalid additional info
 	invalidInfo := []byte{0x1c} // UINT with additional info 28 (reserved)
-	err = Verify(invalidInfo)
-	if !errors.Is(err, ErrInvalidAdditionalInfo) {
+	if err := Verify(invalidInfo); !errors.Is(err, ErrInvalidAdditionalInfo) {
 		t.Errorf("Verify invalid info: expected ErrInvalidAdditionalInfo, got %v", err)
-	}
-}
-
-// Tests a length overflow issue caught by the fuzzer in crypto-rs:
-// https://github.com/dark-bio/crypto-rs/pull/3
-func TestIssue3(t *testing.T) {
-	encoded := []byte{123, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255}
-	var s string
-	err := Unmarshal(encoded, &s)
-	if err == nil {
-		t.Error("Unmarshal should reject malformed data")
-	}
-}
-
-func TestMarshalUnmarshalFixedByteArray(t *testing.T) {
-	// Test fixed-size byte arrays directly (not in structs)
-	original := [32]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
-		17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32}
-
-	data, err := Marshal(original)
-	if err != nil {
-		t.Fatalf("Marshal error: %v", err)
-	}
-
-	var decoded [32]byte
-	if err := Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal error: %v", err)
-	}
-
-	if decoded != original {
-		t.Errorf("Fixed array mismatch: got %x, want %x", decoded, original)
 	}
 }
