@@ -10,7 +10,6 @@
 package xdsa
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -84,8 +83,8 @@ func ParseSecretKey(seed [SecretKeySize]byte) *SecretKey {
 // ParseSecretKeyDER parses a DER buffer into a private key..
 func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	// Parse the DER encoded container
-	var info asn1ext.PKCS8PrivateKey
-	if _, err := asn1.Unmarshal(der, &info); err != nil {
+	info, err := asn1ext.ParsePKCS8PrivateKey(der)
+	if err != nil {
 		return nil, err
 	}
 	if info.Version != 0 {
@@ -98,16 +97,6 @@ func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	// Private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
 	if len(info.PrivateKey) != 64 {
 		return nil, errors.New("xdsa: composite private key must be 64 bytes")
-	}
-	// Go's ASN1 parser permits unused trailing bytes (inside or outside). We
-	// don't want to allow that, so just round trip the format and see if it's
-	// matching or not.
-	recoded, err := asn1.Marshal(info)
-	if err != nil {
-		return nil, err
-	}
-	if !bytes.Equal(recoded, der) {
-		return nil, errors.New("xdsa: non-canonical DER encoding")
 	}
 	// Everything seems fine, instantiate the key
 	var seed [SecretKeySize]byte
@@ -258,8 +247,8 @@ func MustParsePublicKey(b [PublicKeySize]byte) *PublicKey {
 // ParsePublicKeyDER parses a DER buffer into a public key.
 func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	// Parse the DER encoded container
-	var info asn1ext.SubjectPublicKeyInfo
-	if _, err := asn1.Unmarshal(der, &info); err != nil {
+	info, err := asn1ext.ParseSubjectPublicKeyInfo(der)
+	if err != nil {
 		return nil, err
 	}
 	// Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512 (1.3.6.1.5.5.7.6.48)
@@ -273,16 +262,6 @@ func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	}
 	if info.SubjectPublicKey.BitLength != PublicKeySize*8 {
 		return nil, errors.New("xdsa: public key BIT STRING must be byte-aligned")
-	}
-	// Go's ASN1 parser permits unused trailing bytes (inside or outside). We
-	// don't want to allow that, so just round trip the format and see if it's
-	// matching or not.
-	recoded, err := asn1.Marshal(info)
-	if err != nil {
-		return nil, err
-	}
-	if !bytes.Equal(recoded, der) {
-		return nil, errors.New("xdsa: non-canonical DER encoding")
 	}
 	// Everything seems fine, instantiate the key
 	var b [PublicKeySize]byte
