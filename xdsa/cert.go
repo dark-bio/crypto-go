@@ -7,14 +7,17 @@
 package xdsa
 
 import (
+	stdx509 "crypto/x509"
 	"encoding/asn1"
 	"errors"
 
+	"github.com/dark-bio/crypto-go/internal/asn1ext"
+	"github.com/dark-bio/crypto-go/internal/x509ext"
 	"github.com/dark-bio/crypto-go/pem"
 	"github.com/dark-bio/crypto-go/x509"
 )
 
-// secretKeySigner wraps SecretKey to implement x509.Signer.
+// secretKeySigner wraps SecretKey to implement x509ext.Signer.
 type secretKeySigner struct {
 	key *SecretKey
 }
@@ -47,7 +50,7 @@ func (k *PublicKey) AlgorithmOID() asn1.ObjectIdentifier {
 // MarshalCertDER generates a DER-encoded X.509 certificate for this public key,
 // signed by an xDSA issuer.
 func (k *PublicKey) MarshalCertDER(signer *SecretKey, params *x509.Params) []byte {
-	return x509.New(k, &secretKeySigner{signer}, params)
+	return x509ext.New(k, &secretKeySigner{signer}, params)
 }
 
 // MarshalCertPEM generates a PEM-encoded X.509 certificate for this public key,
@@ -58,52 +61,58 @@ func (k *PublicKey) MarshalCertPEM(signer *SecretKey, params *x509.Params) strin
 
 // ParseCertDER parses a public key from a DER-encoded X.509 certificate,
 // verifying the signature against the provided signer's public key.
-// Returns the public key and validity period (notBefore, notAfter).
+// Returns the public key and validity period.
 func ParseCertDER(der []byte, signer *PublicKey) (*PublicKey, uint64, uint64, error) {
-	cert, err := x509.Parse(der)
+	// Parse the certificate
+	cert, err := stdx509.ParseCertificate(der)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, errors.New("xdsa: " + err.Error())
 	}
-
-	// Verify the signature
+	// Validate the content against the provided signer (composite signature)
 	if len(cert.Signature) != SignatureSize {
 		return nil, 0, 0, errors.New("xdsa: invalid signature length")
 	}
 	var sig [SignatureSize]byte
 	copy(sig[:], cert.Signature)
 
-	if err := signer.Verify(cert.TBSRaw, sig); err != nil {
+	if err := signer.Verify(cert.RawTBSCertificate, sig); err != nil {
 		return nil, 0, 0, err
 	}
-
-	// Extract the public key
-	if len(cert.PublicKey) != PublicKeySize {
+	// Extract the embedded public key (ML-DSA-65 1952 bytes || Ed25519 32 bytes)
+	spki, err := asn1ext.ParseSubjectPublicKeyInfo(cert.RawSubjectPublicKeyInfo)
+	if err != nil {
+		return nil, 0, 0, errors.New("xdsa: " + err.Error())
+	}
+	if spki.SubjectPublicKey.BitLength%8 != 0 {
+		return nil, 0, 0, errors.New("xdsa: invalid public key bit string")
+	}
+	if len(spki.SubjectPublicKey.Bytes) != PublicKeySize {
 		return nil, 0, 0, errors.New("xdsa: invalid public key length in certificate")
 	}
-	var pkBytes [PublicKeySize]byte
-	copy(pkBytes[:], cert.PublicKey)
+	var blob [PublicKeySize]byte
+	copy(blob[:], spki.SubjectPublicKey.Bytes)
 
-	pk, err := ParsePublicKey(pkBytes)
+	key, err := ParsePublicKey(blob)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-
-	return pk, cert.NotBefore, cert.NotAfter, nil
+	// Extract the validity period
+	return key, uint64(cert.NotBefore.Unix()), uint64(cert.NotAfter.Unix()), nil
 }
 
 // MustParseCertDER parses a public key from a DER-encoded X.509 certificate.
 // It panics if the parsing or verification fails.
 func MustParseCertDER(der []byte, signer *PublicKey) (*PublicKey, uint64, uint64) {
-	pk, notBefore, notAfter, err := ParseCertDER(der, signer)
+	key, start, until, err := ParseCertDER(der, signer)
 	if err != nil {
 		panic("xdsa: " + err.Error())
 	}
-	return pk, notBefore, notAfter
+	return key, start, until
 }
 
 // ParseCertPEM parses a public key from a PEM-encoded X.509 certificate,
 // verifying the signature against the provided signer's public key.
-// Returns the public key and validity period (notBefore, notAfter).
+// Returns the public key and validity period.
 func ParseCertPEM(s string, signer *PublicKey) (*PublicKey, uint64, uint64, error) {
 	kind, blob, err := pem.Decode([]byte(s))
 	if err != nil {
@@ -118,9 +127,9 @@ func ParseCertPEM(s string, signer *PublicKey) (*PublicKey, uint64, uint64, erro
 // MustParseCertPEM parses a public key from a PEM-encoded X.509 certificate.
 // It panics if the parsing or verification fails.
 func MustParseCertPEM(s string, signer *PublicKey) (*PublicKey, uint64, uint64) {
-	pk, notBefore, notAfter, err := ParseCertPEM(s, signer)
+	key, start, until, err := ParseCertPEM(s, signer)
 	if err != nil {
 		panic("xdsa: " + err.Error())
 	}
-	return pk, notBefore, notAfter
+	return key, start, until
 }
