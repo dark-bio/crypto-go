@@ -8,7 +8,6 @@ package xhpke
 
 import (
 	stdx509 "crypto/x509"
-	"encoding/asn1"
 	"errors"
 
 	"github.com/dark-bio/crypto-go/internal/asn1ext"
@@ -18,34 +17,19 @@ import (
 	"github.com/dark-bio/crypto-go/xdsa"
 )
 
-// xdsaSigner wraps xdsa.SecretKey to implement x509.Signer.
+// xdsaSigner implements x509.Signer through an XDSA secret key.
 type xdsaSigner struct {
 	key *xdsa.SecretKey
 }
 
-func (s *xdsaSigner) Sign(message []byte) []byte {
-	sig := s.key.Sign(message)
-	return sig[:]
+// Sign signs the message and returns the signature.
+func (s *xdsaSigner) Sign(message []byte) [xdsa.SignatureSize]byte {
+	return s.key.Sign(message)
 }
 
-func (s *xdsaSigner) SignatureOID() asn1.ObjectIdentifier {
-	return xdsa.OID
-}
-
-func (s *xdsaSigner) IssuerPublicKeyBytes() []byte {
-	pk := s.key.PublicKey().Marshal()
-	return pk[:]
-}
-
-// Bytes returns the raw public key bytes for embedding in certificates.
-func (k *PublicKey) Bytes() []byte {
-	b := k.Marshal()
-	return b[:]
-}
-
-// AlgorithmOID returns the OID for X-Wing.
-func (k *PublicKey) AlgorithmOID() asn1.ObjectIdentifier {
-	return OID
+// PublicKey returns the issuer's public key.
+func (s *xdsaSigner) PublicKey() [xdsa.PublicKeySize]byte {
+	return s.key.PublicKey().Marshal()
 }
 
 // MarshalCertDER generates a DER-encoded X.509 certificate for this public key,
@@ -63,7 +47,7 @@ func (k *PublicKey) MarshalCertDER(signer *xdsa.SecretKey, params *x509.Params) 
 		IsCA:        false,
 		PathLen:     nil,
 	}
-	return x509ext.New(k, &xdsaSigner{signer}, eeParams)
+	return x509ext.New[[PublicKeySize]byte](k, &xdsaSigner{signer}, eeParams)
 }
 
 // MarshalCertPEM generates a PEM-encoded X.509 certificate for this public key,

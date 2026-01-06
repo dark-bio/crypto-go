@@ -25,12 +25,12 @@ import (
 )
 
 const (
-	// SignaturePrefix is the byte encoding of "CompositeAlgorithmSignatures2025"
+	// signaturePrefix is the byte encoding of "CompositeAlgorithmSignatures2025"
 	// per the IETF composite signature spec.
-	SignaturePrefix = "CompositeAlgorithmSignatures2025"
+	signaturePrefix = "CompositeAlgorithmSignatures2025"
 
-	// SignatureDomain is the signature label for ML-DSA-65-Ed25519-SHA512.
-	SignatureDomain = "COMPSIG-MLDSA65-Ed25519-SHA512"
+	// signatureDomain is the signature label for ML-DSA-65-Ed25519-SHA512.
+	signatureDomain = "COMPSIG-MLDSA65-Ed25519-SHA512"
 
 	// SecretKeySize is the size of the secret key in bytes.
 	// Format: ML-DSA seed (32 bytes) || Ed25519 seed (32 bytes)
@@ -189,16 +189,16 @@ func (k *SecretKey) Sign(message []byte) [SignatureSize]byte {
 	// where ctx is empty and PH is SHA512
 	prehash := sha512.Sum512(message)
 
-	mPrime := make([]byte, 0, len(SignaturePrefix)+len(SignatureDomain)+1+64)
-	mPrime = append(mPrime, SignaturePrefix...)
-	mPrime = append(mPrime, SignatureDomain...)
+	mPrime := make([]byte, 0, len(signaturePrefix)+len(signatureDomain)+1+64)
+	mPrime = append(mPrime, signaturePrefix...)
+	mPrime = append(mPrime, signatureDomain...)
 	mPrime = append(mPrime, 0) // len(ctx) = 0
 	mPrime = append(mPrime, prehash[:]...)
 
 	// Sign M' with both algorithms, as ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
 	var sig [SignatureSize]byte
 
-	mldsa65.SignTo(k.mlKey, mPrime, []byte(SignatureDomain), false, sig[:3309])
+	mldsa65.SignTo(k.mlKey, mPrime, []byte(signatureDomain), false, sig[:3309])
 	edSig := ed25519.Sign(k.edKey, mPrime)
 	copy(sig[3309:], edSig)
 
@@ -349,14 +349,14 @@ func (k *PublicKey) Verify(message []byte, sig [SignatureSize]byte) error {
 	// where ctx is empty and PH is SHA512
 	prehash := sha512.Sum512(message)
 
-	mPrime := make([]byte, 0, len(SignaturePrefix)+len(SignatureDomain)+1+64)
-	mPrime = append(mPrime, SignaturePrefix...)
-	mPrime = append(mPrime, SignatureDomain...)
+	mPrime := make([]byte, 0, len(signaturePrefix)+len(signatureDomain)+1+64)
+	mPrime = append(mPrime, signaturePrefix...)
+	mPrime = append(mPrime, signatureDomain...)
 	mPrime = append(mPrime, 0) // len(ctx) = 0
 	mPrime = append(mPrime, prehash[:]...)
 
 	// Split and verify both signatures
-	if !mldsa65.Verify(k.mlKey, mPrime, []byte(SignatureDomain), sig[:3309]) {
+	if !mldsa65.Verify(k.mlKey, mPrime, []byte(signatureDomain), sig[:3309]) {
 		return errors.New("xdsa: ML-DSA signature verification failed")
 	}
 	if !ed25519.Verify(k.edKey, mPrime, sig[3309:]) {

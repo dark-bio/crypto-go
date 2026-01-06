@@ -8,7 +8,6 @@ package xdsa
 
 import (
 	stdx509 "crypto/x509"
-	"encoding/asn1"
 	"errors"
 
 	"github.com/dark-bio/crypto-go/internal/asn1ext"
@@ -17,40 +16,25 @@ import (
 	"github.com/dark-bio/crypto-go/x509"
 )
 
-// secretKeySigner wraps SecretKey to implement x509ext.Signer.
-type secretKeySigner struct {
+// xdsaSigner implements x509.Signer through an XDSA secret key.
+type xdsaSigner struct {
 	key *SecretKey
 }
 
-func (s *secretKeySigner) Sign(message []byte) []byte {
-	sig := s.key.Sign(message)
-	return sig[:]
+// Sign signs the message and returns the signature.
+func (s *xdsaSigner) Sign(message []byte) [SignatureSize]byte {
+	return s.key.Sign(message)
 }
 
-func (s *secretKeySigner) SignatureOID() asn1.ObjectIdentifier {
-	return OID
-}
-
-func (s *secretKeySigner) IssuerPublicKeyBytes() []byte {
-	pk := s.key.PublicKey().Marshal()
-	return pk[:]
-}
-
-// Bytes returns the raw public key bytes for embedding in certificates.
-func (k *PublicKey) Bytes() []byte {
-	b := k.Marshal()
-	return b[:]
-}
-
-// AlgorithmOID returns the OID for xDSA (MLDSA65-Ed25519-SHA512).
-func (k *PublicKey) AlgorithmOID() asn1.ObjectIdentifier {
-	return OID
+// PublicKey returns the issuer's public key.
+func (s *xdsaSigner) PublicKey() [PublicKeySize]byte {
+	return s.key.PublicKey().Marshal()
 }
 
 // MarshalCertDER generates a DER-encoded X.509 certificate for this public key,
 // signed by an xDSA issuer.
 func (k *PublicKey) MarshalCertDER(signer *SecretKey, params *x509.Params) []byte {
-	return x509ext.New(k, &secretKeySigner{signer}, params)
+	return x509ext.New[[PublicKeySize]byte](k, &xdsaSigner{signer}, params)
 }
 
 // MarshalCertPEM generates a PEM-encoded X.509 certificate for this public key,

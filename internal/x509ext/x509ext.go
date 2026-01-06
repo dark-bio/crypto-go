@@ -17,27 +17,39 @@ import (
 	"math/big"
 	"time"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/dark-bio/crypto-go/x509"
 )
 
+// XDSAOrXHPKEPublicKey defines the supported public key sizes. This allows us
+// to reuse
+type XDSAOrXHPKEPublicKey interface {
+	~[1984]byte | ~[1216]byte
+}
+
+var (
+	// oidXDSA is the ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
+	oidXDSA = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 6, 48}
+
+	// oidXWing is the ASN.1 object identifier for X-Wing.
+	oidXWing = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 62253, 25722}
+)
+
 // Subject is an interface for types that can be embedded into X.509 certificates
 // as the subject's public key.
-type Subject interface {
-	// Bytes returns the raw public key bytes to embed in the certificate.
-	Bytes() []byte
-	// AlgorithmOID returns the OID for the subject's algorithm.
-	AlgorithmOID() asn1.ObjectIdentifier
+type Subject[T XDSAOrXHPKEPublicKey] interface {
+	// Marshal returns the raw public key bytes to embed in the certificate.
+	Marshal() T
 }
 
 // Signer is an interface for types that can sign X.509 certificates.
 type Signer interface {
-	// Sign signs the message and returns the signature bytes.
-	Sign(message []byte) []byte
-	// SignatureOID returns the OID for the signature algorithm.
-	SignatureOID() asn1.ObjectIdentifier
-	// IssuerPublicKeyBytes returns the issuer's public key bytes for AKI extension.
-	IssuerPublicKeyBytes() []byte
+	// Sign signs the message and returns the signature.
+	Sign(message []byte) [3373]byte
+
+	// PublicKey returns the issuer's public key.
+	PublicKey() [1984]byte
 }
 
 // tbsCertificate is the ASN.1 structure for the TBS (to-be-signed) certificate.
@@ -72,7 +84,7 @@ type certificate struct {
 }
 
 // New creates an X.509 certificate for a subject, signed by the given signer.
-func New(subject Subject, signer Signer, params *x509.Params) []byte {
+func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509.Params) []byte {
 	// Validate common names are valid UTF-8
 	if !utf8.ValidString(params.SubjectName) {
 		panic("x509: subject name is not valid UTF-8")
@@ -89,9 +101,9 @@ func New(subject Subject, signer Signer, params *x509.Params) []byte {
 	serialBytes[0] &= 0x7F // Ensure positive (MSB = 0)
 	serial := new(big.Int).SetBytes(serialBytes)
 
-	// Create the signature algorithm identifier
+	// Create the signature algorithm identifier (always xDSA)
 	sigAlg := pkix.AlgorithmIdentifier{
-		Algorithm: signer.SignatureOID(),
+		Algorithm: oidXDSA,
 	}
 
 	// Build subject and issuer names
@@ -99,10 +111,19 @@ func New(subject Subject, signer Signer, params *x509.Params) []byte {
 	subjectName := makeCNName(params.SubjectName)
 
 	// Build the subject public key info
-	subjectBytes := subject.Bytes()
+	subjectArray := subject.Marshal()
+	subjectBytes := unsafe.Slice((*byte)(unsafe.Pointer(&subjectArray)), unsafe.Sizeof(subjectArray))
+
+	var subjectOID asn1.ObjectIdentifier
+	switch unsafe.Sizeof(subjectArray) {
+	case 1984:
+		subjectOID = oidXDSA
+	case 1216:
+		subjectOID = oidXWing
+	}
 	spki := subjectPublicKeyInfo{
 		Algorithm: pkix.AlgorithmIdentifier{
-			Algorithm: subject.AlgorithmOID(),
+			Algorithm: subjectOID,
 		},
 		SubjectPublicKey: asn1.BitString{
 			Bytes:     subjectBytes,
@@ -111,7 +132,8 @@ func New(subject Subject, signer Signer, params *x509.Params) []byte {
 	}
 
 	// Build extensions
-	extensions := makeExtensions(subjectBytes, signer.IssuerPublicKeyBytes(), params.IsCA, params.PathLen)
+	pk := signer.PublicKey()
+	extensions := makeExtensions(subjectBytes, pk[:], params.IsCA, params.PathLen)
 
 	// Build the TBS certificate
 	tbs := tbsCertificate{
@@ -142,7 +164,7 @@ func New(subject Subject, signer Signer, params *x509.Params) []byte {
 		TBSCertificate:     asn1.RawValue{FullBytes: tbsDER},
 		SignatureAlgorithm: sigAlg,
 		SignatureValue: asn1.BitString{
-			Bytes:     signature,
+			Bytes:     signature[:],
 			BitLength: len(signature) * 8,
 		},
 	}
