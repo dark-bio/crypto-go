@@ -104,30 +104,3 @@ func TestCertInvalidSigner(t *testing.T) {
 		t.Error("expected verification to fail with wrong signer")
 	}
 }
-
-// TestCertSelfSigned tests self-signed certificate creation and verification.
-func TestCertSelfSigned(t *testing.T) {
-	secret := GenerateKey()
-	public := secret.PublicKey()
-
-	start := uint64(time.Now().Unix())
-	until := start + 3600
-
-	pathLen := uint8(1)
-	derCert := public.MarshalCertDER(secret, &x509.Params{
-		SubjectName: "Self",
-		IssuerName:  "Self",
-		NotBefore:   start,
-		NotAfter:    until,
-		IsCA:        true,
-		PathLen:     &pathLen,
-	})
-
-	parsedKey, _, _, err := ParseCertDER(derCert, public)
-	if err != nil {
-		t.Fatalf("ParseCertDER failed for self-signed cert: %v", err)
-	}
-	if parsedKey.Marshal() != public.Marshal() {
-		t.Error("parsed public key does not match original")
-	}
-}

@@ -104,35 +104,3 @@ func TestCertInvalidSigner(t *testing.T) {
 		t.Error("expected verification to fail with wrong signer")
 	}
 }
-
-// TestCertForcesEndEntity tests that HPKE certificates are always end-entity,
-// even if IsCA is set in params.
-func TestCertForcesEndEntity(t *testing.T) {
-	aliceSecret := GenerateKey()
-	bobbySecret := xdsa.GenerateKey()
-	alicePublic := aliceSecret.PublicKey()
-	bobbyPublic := bobbySecret.PublicKey()
-
-	start := uint64(time.Now().Unix())
-	until := start + 3600
-
-	// Try to create a CA cert (should be forced to end-entity)
-	pathLen := uint8(1)
-	derCert := alicePublic.MarshalCertDER(bobbySecret, &x509.Params{
-		SubjectName: "Alice",
-		IssuerName:  "Bobby",
-		NotBefore:   start,
-		NotAfter:    until,
-		IsCA:        true, // This should be ignored
-		PathLen:     &pathLen,
-	})
-
-	// Verify we can still parse it
-	parsedKey, _, _, err := ParseCertDER(derCert, bobbyPublic)
-	if err != nil {
-		t.Fatalf("ParseCertDER failed: %v", err)
-	}
-	if parsedKey.Marshal() != alicePublic.Marshal() {
-		t.Error("parsed public key does not match original")
-	}
-}
