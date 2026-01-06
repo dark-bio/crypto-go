@@ -79,8 +79,12 @@ func ParseSecretKey(seed [SecretKeySize]byte) *SecretKey {
 func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	// Parse the DER encoded container
 	var info asn1ext.PKCS8PrivateKey
-	if _, err := asn1.Unmarshal(der, &info); err != nil {
+	rest, err := asn1.Unmarshal(der, &info)
+	if err != nil {
 		return nil, err
+	}
+	if len(rest) > 0 {
+		return nil, errors.New("xhpke: trailing data after DER")
 	}
 	if info.Version != 0 {
 		return nil, errors.New("xhpke: unsupported version")
@@ -222,8 +226,12 @@ func MustParsePublicKey(b [PublicKeySize]byte) *PublicKey {
 func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	// Parse the DER encoded container
 	var info asn1ext.SubjectPublicKeyInfo
-	if _, err := asn1.Unmarshal(der, &info); err != nil {
+	rest, err := asn1.Unmarshal(der, &info)
+	if err != nil {
 		return nil, err
+	}
+	if len(rest) > 0 {
+		return nil, errors.New("xhpke: trailing data after DER")
 	}
 	// Ensure the algorithm OID matches X-Wing and extract the actual public key
 	if !info.Algorithm.Algorithm.Equal(OID) {
