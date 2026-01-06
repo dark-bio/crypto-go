@@ -233,6 +233,9 @@ func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	if len(keyBytes) != PublicKeySize {
 		return nil, errors.New("xhpke: public key must be 1216 bytes")
 	}
+	if info.SubjectPublicKey.BitLength != PublicKeySize*8 {
+		return nil, errors.New("xhpke: public key BIT STRING must be byte-aligned")
+	}
 	// Public key extracted, return the wrapper
 	var b [PublicKeySize]byte
 	copy(b[:], keyBytes)

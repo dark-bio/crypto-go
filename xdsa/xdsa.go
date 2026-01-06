@@ -266,10 +266,13 @@ func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	if !info.Algorithm.Algorithm.Equal(OID) {
 		return nil, errors.New("xdsa: not a composite ML-DSA-65-Ed25519-SHA512 public key")
 	}
-	// Public key is ML-DSA-65 (1952 bytes) || Ed25519 (32 bytes) = 1984 bytes
+	// Public key is ML-DSA-65 (1952 bytes) || Ed25519 (32 bytes) = 1984 bytes.
 	keyBytes := info.SubjectPublicKey.Bytes
 	if len(keyBytes) != PublicKeySize {
 		return nil, errors.New("xdsa: composite public key must be 1984 bytes")
+	}
+	if info.SubjectPublicKey.BitLength != PublicKeySize*8 {
+		return nil, errors.New("xdsa: public key BIT STRING must be byte-aligned")
 	}
 	// Go's ASN1 parser permits unused trailing bytes (inside or outside). We
 	// don't want to allow that, so just round trip the format and see if it's
