@@ -69,9 +69,7 @@ func encodeValue(enc *Encoder, v reflect.Value) error {
 
 		// Count exportable fields
 		fields := structFields(t)
-		if len(fields) == 0 {
-			return fmt.Errorf("%w: struct %s has no exportable fields", ErrUnsupportedType, t.Name())
-		}
+
 		// Check for array or tomap tag on the struct
 		if wantArray(t) {
 			enc.EncodeArrayHeader(len(fields))
@@ -87,7 +85,7 @@ func encodeValue(enc *Encoder, v reflect.Value) error {
 		if err != nil {
 			return err
 		}
-		if len(mapFields) == 0 {
+		if len(mapFields) == 0 && len(fields) > 0 {
 			return fmt.Errorf("%w: struct %s requires cbor:\"_,array\" or cbor:\"N,key\" tags", ErrUnsupportedType, t.Name())
 		}
 		// Sort fields by key for deterministic encoding
@@ -208,7 +206,7 @@ func decodeValue(dec *Decoder, v reflect.Value) error {
 		if err != nil {
 			return err
 		}
-		if len(mapFields) == 0 {
+		if len(mapFields) == 0 && len(fields) > 0 {
 			return fmt.Errorf("%w: struct %s requires cbor:\"_,array\" or cbor:\"N,key\" tags", ErrUnsupportedType, t.Name())
 		}
 		// Build lookup from key to field
