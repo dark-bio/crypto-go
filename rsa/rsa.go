@@ -180,7 +180,10 @@ func (k *SecretKey) Marshal() [SecretKeySize]byte {
 
 // MarshalDER serializes the private key to PKCS#8 DER format.
 func (k *SecretKey) MarshalDER() []byte {
-	der, _ := x509.MarshalPKCS8PrivateKey(k.inner)
+	der, err := x509.MarshalPKCS8PrivateKey(k.inner)
+	if err != nil {
+		panic(err) // cannot fail, be loud if it does
+	}
 	return der
 }
 
@@ -201,10 +204,15 @@ func (k *SecretKey) Fingerprint() [32]byte {
 }
 
 // Sign creates a digital signature of the message using PKCS#1 v1.5.
-func (k *SecretKey) Sign(message []byte) []byte {
+func (k *SecretKey) Sign(message []byte) [SignatureSize]byte {
 	hash := sha256.Sum256(message)
-	sig, _ := rsa.SignPKCS1v15(rand.Reader, k.inner, crypto.SHA256, hash[:])
-	return sig
+	sig, err := rsa.SignPKCS1v15(rand.Reader, k.inner, crypto.SHA256, hash[:])
+	if err != nil {
+		panic(err) // cannot fail, be loud if it does
+	}
+	var out [SignatureSize]byte
+	copy(out[:], sig)
+	return out
 }
 
 // PublicKey contains a 2048-bit RSA public key usable for verification, with
@@ -343,14 +351,14 @@ func (k *PublicKey) Fingerprint() [32]byte {
 }
 
 // Verify verifies a digital signature.
-func (k *PublicKey) Verify(message, signature []byte) error {
+func (k *PublicKey) Verify(message []byte, signature [SignatureSize]byte) error {
 	hash := sha256.Sum256(message)
-	return rsa.VerifyPKCS1v15(k.inner, crypto.SHA256, hash[:], signature)
+	return rsa.VerifyPKCS1v15(k.inner, crypto.SHA256, hash[:], signature[:])
 }
 
 // VerifyHash verifies a digital signature on an already hashed message.
-func (k *PublicKey) VerifyHash(hash, signature []byte) error {
-	return rsa.VerifyPKCS1v15(k.inner, crypto.SHA256, hash, signature)
+func (k *PublicKey) VerifyHash(hash []byte, signature [SignatureSize]byte) error {
+	return rsa.VerifyPKCS1v15(k.inner, crypto.SHA256, hash, signature[:])
 }
 
 func reverseBytes(b []byte) []byte {
