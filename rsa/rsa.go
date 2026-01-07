@@ -139,9 +139,12 @@ func MustParseSecretKeyDER(der []byte) *SecretKey {
 
 // ParseSecretKeyPEM parses a PEM-encoded private key.
 func ParseSecretKeyPEM(s string) (*SecretKey, error) {
-	_, blob, err := pem.Decode([]byte(s))
+	kind, blob, err := pem.Decode([]byte(s))
 	if err != nil {
 		return nil, err
+	}
+	if kind != "PRIVATE KEY" {
+		return nil, errors.New("rsa: invalid PEM type: " + kind)
 	}
 	return ParseSecretKeyDER(blob)
 }
@@ -293,9 +296,12 @@ func MustParsePublicKeyDER(der []byte) *PublicKey {
 
 // ParsePublicKeyPEM parses a PEM-encoded public key.
 func ParsePublicKeyPEM(s string) (*PublicKey, error) {
-	_, blob, err := pem.Decode([]byte(s))
+	kind, blob, err := pem.Decode([]byte(s))
 	if err != nil {
 		return nil, err
+	}
+	if kind != "PUBLIC KEY" {
+		return nil, errors.New("rsa: invalid PEM type: " + kind)
 	}
 	return ParsePublicKeyDER(blob)
 }
