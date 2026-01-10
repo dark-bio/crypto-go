@@ -379,6 +379,50 @@ func mapKeyCmp(a, b int64) int {
 	return slices.Compare(encodeKey(a), encodeKey(b))
 }
 
+// Raw is a placeholder type to allow only partially parsing CBOR objects when
+// some part might depend on another (e.g. version tag, method in an RPC, etc).
+type Raw []byte
+
+// skip_object advances the decoder past one CBOR item without validation. It
+// does do some minimal type checks as walking the CBOR does require walking
+// all the inner fields too.
+func skipObject(dec *Decoder) error {
+	major, value, err := dec.decodeHeader()
+	if err != nil {
+		return err
+	}
+	switch major {
+	case majorUint, majorNint:
+		return nil
+
+	case majorBytes, majorText:
+		_, err := dec.readBytes(value)
+		return err
+
+	case majorArray:
+		for range value {
+			if err := skipObject(dec); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	case majorMap:
+		for range value {
+			if err := skipObject(dec); err != nil {
+				return err
+			}
+			if err := skipObject(dec); err != nil {
+				return err
+			}
+		}
+		return nil
+
+	default:
+		return fmt.Errorf("%w: major type %d", ErrUnsupportedType, major)
+	}
+}
+
 // Verify does a dry-run decoding to verify that only the tiny, strict subset
 // of types permitted by this package were used.
 func Verify(data []byte) error {

@@ -45,6 +45,11 @@ func encodeValue(enc *Encoder, v reflect.Value) error {
 		return nil
 
 	case reflect.Slice:
+		// Check for Raw type - pass through bytes directly
+		if v.Type() == reflect.TypeOf(Raw{}) {
+			enc.buf = append(enc.buf, v.Bytes()...)
+			return nil
+		}
 		// Only []byte is permitted as a variable-length slice
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			enc.EncodeBytes(v.Bytes())
@@ -156,6 +161,15 @@ func decodeValue(dec *Decoder, v reflect.Value) error {
 		return nil
 
 	case reflect.Slice:
+		// Check for Raw type - capture bytes without parsing
+		if v.Type() == reflect.TypeOf(Raw{}) {
+			start := dec.pos
+			if err := skipObject(dec); err != nil {
+				return err
+			}
+			v.SetBytes(append([]byte(nil), dec.data[start:dec.pos]...))
+			return nil
+		}
 		// Only []byte is permitted as a variable-length slice
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			val, err := dec.DecodeBytes()

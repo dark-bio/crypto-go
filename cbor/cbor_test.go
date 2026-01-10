@@ -637,6 +637,110 @@ func TestMapRejection(t *testing.T) {
 	}
 }
 
+// Tests that Raw preserves bytes when re-encoded.
+func TestRawEncoding(t *testing.T) {
+	// Unsigned integer (42)
+	raw := Raw{0x18, 0x2a}
+	if encoded, _ := Marshal(raw); !bytes.Equal(encoded, []byte{0x18, 0x2a}) {
+		t.Errorf("Raw encode uint: got %x, want 182a", encoded)
+	}
+	// String "hello"
+	raw = Raw{0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f}
+	if encoded, _ := Marshal(raw); !bytes.Equal(encoded, []byte{0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f}) {
+		t.Errorf("Raw encode string: got %x, want 6568656c6c6f", encoded)
+	}
+	// Tuple with Raw inside: ("method", <raw bytes for u64 1>)
+	type MethodCall struct {
+		_      struct{} `cbor:"_,array"`
+		Method string
+		Params Raw
+	}
+	original := MethodCall{Method: "method", Params: Raw{0x01}}
+	encoded, _ := Marshal(original)
+	want := []byte{
+		0x82,                                     // array of 2
+		0x66, 0x6d, 0x65, 0x74, 0x68, 0x6f, 0x64, // "method"
+		0x01, // raw: u64 1
+	}
+	if !bytes.Equal(encoded, want) {
+		t.Errorf("Raw encode tuple: got %x, want %x", encoded, want)
+	}
+}
+
+// Tests that Raw captures and defers decoding correctly.
+func TestRawDecoding(t *testing.T) {
+	// Unsigned integer (42)
+	data := []byte{0x18, 0x2a}
+	var raw Raw
+	if err := Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Raw decode uint error: %v", err)
+	}
+	if !bytes.Equal(raw, []byte{0x18, 0x2a}) {
+		t.Errorf("Raw decode uint: got %x, want 182a", raw)
+	}
+	// String "hello"
+	data = []byte{0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f}
+	if err := Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Raw decode string error: %v", err)
+	}
+	if !bytes.Equal(raw, []byte{0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f}) {
+		t.Errorf("Raw decode string: got %x, want 6568656c6c6f", raw)
+	}
+	// Tuple with Raw: ("method", <raw params>)
+	type MethodCall struct {
+		_      struct{} `cbor:"_,array"`
+		Method string
+		Params Raw
+	}
+	data = []byte{
+		0x82,                                     // array of 2
+		0x66, 0x6d, 0x65, 0x74, 0x68, 0x6f, 0x64, // "method"
+		0x82, 0x01, 0x63, 0x61, 0x72, 0x67, // (1, "arg")
+	}
+	var decoded MethodCall
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal MethodCall error: %v", err)
+	}
+	if decoded.Method != "method" {
+		t.Errorf("Method: got %q, want %q", decoded.Method, "method")
+	}
+	if !bytes.Equal(decoded.Params, []byte{0x82, 0x01, 0x63, 0x61, 0x72, 0x67}) {
+		t.Errorf("Params: got %x, want 82016361726", decoded.Params)
+	}
+}
+
+// Tests that Raw rejects unsupported major types.
+func TestRawRejection(t *testing.T) {
+	// Major type 6 (tags) - unsupported
+	tagged := []byte{0xc0, 0x01}
+	var raw Raw
+	err := Unmarshal(tagged, &raw)
+	if err == nil {
+		t.Error("Raw should reject tagged data")
+	} else if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("Expected ErrUnsupportedType, got %v", err)
+	}
+
+	// Major type 7 (floats/bools) - unsupported
+	floatData := []byte{0xf5}
+	err = Unmarshal(floatData, &raw)
+	if err == nil {
+		t.Error("Raw should reject float/bool data")
+	} else if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("Expected ErrUnsupportedType, got %v", err)
+	}
+
+	// Trailing bytes
+	data, _ := Marshal(uint64(42))
+	data = append(data, 0x00)
+	err = Unmarshal(data, &raw)
+	if err == nil {
+		t.Error("Raw should reject trailing bytes")
+	} else if !errors.Is(err, ErrTrailingBytes) {
+		t.Errorf("Expected ErrTrailingBytes, got %v", err)
+	}
+}
+
 // Tests that the dry-decoding verifier properly restricts the allowed types.
 func TestVerify(t *testing.T) {
 	type TestMap struct {
