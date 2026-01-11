@@ -24,7 +24,8 @@ type PKCS8PrivateKey struct {
 }
 
 // ParsePKCS8PrivateKey parses a DER-encoded PKCS#8 private key using strict
-// DER validation via cryptobyte.
+// DER validation via cryptobyte. To keep things deterministic, we also reject
+// optional public keys.
 func ParsePKCS8PrivateKey(der []byte) (*PKCS8PrivateKey, error) {
 	input := cryptobyte.String(der)
 
@@ -39,7 +40,9 @@ func ParsePKCS8PrivateKey(der []byte) (*PKCS8PrivateKey, error) {
 		return nil, errors.New("asn1ext: invalid version")
 	}
 	version := int(versionBytes[0])
-
+	if version != 0 {
+		return nil, errors.New("asn1ext: unsupported PKCS#8 version")
+	}
 	// Parse the AlgorithmIdentifier SEQUENCE
 	var algSeq cryptobyte.String
 	if !inner.ReadASN1(&algSeq, cbasn1.SEQUENCE) {
@@ -59,8 +62,12 @@ func ParsePKCS8PrivateKey(der []byte) (*PKCS8PrivateKey, error) {
 	}
 	// Extract the raw private key bytes from the OCTET STRING
 	var keyBytes cryptobyte.String
-	if !inner.ReadASN1(&keyBytes, cbasn1.OCTET_STRING) || !inner.Empty() {
+	if !inner.ReadASN1(&keyBytes, cbasn1.OCTET_STRING) {
 		return nil, errors.New("asn1ext: invalid private key encoding")
+	}
+	// Reject if there's any trailing data
+	if !inner.Empty() {
+		return nil, errors.New("asn1ext: trailing data in private key")
 	}
 	return &PKCS8PrivateKey{
 		Version: version,
