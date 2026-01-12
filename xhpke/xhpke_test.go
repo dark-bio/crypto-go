@@ -118,12 +118,12 @@ func TestSealOpen(t *testing.T) {
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Seal the message to the public key
-			sessionKey, ciphertext, err := public.Seal(tt.sealMsg, tt.authMsg, "test")
+			sessionKey, ciphertext, err := public.Seal(tt.sealMsg, tt.authMsg, []byte("test"))
 			if err != nil {
 				t.Fatalf("test %d: failed to seal: %v", i, err)
 			}
 			// Open the sealed message with the secret key
-			plaintext, err := secret.Open(&sessionKey, ciphertext, tt.authMsg, "test")
+			plaintext, err := secret.Open(&sessionKey, ciphertext, tt.authMsg, []byte("test"))
 			if err != nil {
 				t.Fatalf("test %d: failed to open: %v", i, err)
 			}

@@ -13,6 +13,7 @@ package cose
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/dark-bio/crypto-go/cbor"
 	"github.com/dark-bio/crypto-go/xdsa"
@@ -28,6 +29,9 @@ const (
 	// algorithmXHPKE is the private COSE algorithm identifier for X-Wing
 	// (ML-KEM-768 + X25519) HPKE.
 	algorithmXHPKE = -70001
+
+	// HeaderTimestamp is the private COSE header label for Unix timestamp.
+	HeaderTimestamp = -70002
 )
 
 // Error types for COSE operations
@@ -36,11 +40,20 @@ var (
 	ErrInvalidEncapKeySize = errors.New("cose: invalid encapsulated key size")
 	ErrSignatureInvalid    = errors.New("cose: signature verification failed")
 	ErrDecryptionFailed    = errors.New("cose: decryption failed")
+	ErrSignatureStale      = errors.New("cose: signature stale")
 )
 
-// protectedHeader contains the algorithm identifier.
-type protectedHeader struct {
-	Algorithm int64 `cbor:"1,key"`
+// sigProtectedHeader is the protected header for COSE_Sign1.
+type sigProtectedHeader struct {
+	Algorithm int64    `cbor:"1,key"`
+	Kid       [32]byte `cbor:"4,key"`
+	Timestamp int64    `cbor:"-70002,key"`
+}
+
+// encProtectedHeader is the protected header for COSE_Encrypt0.
+type encProtectedHeader struct {
+	Algorithm int64    `cbor:"1,key"`
+	Kid       [32]byte `cbor:"4,key"`
 }
 
 // emptyHeader is an empty unprotected header map (for COSE_Sign1).
@@ -111,7 +124,32 @@ type encStructure struct {
 	ExternalAAD []byte
 }
 
+// SignCBOR creates a COSE_Sign1 digital signature of the msg_to_embed.
+//
+// Uses the current system time as the signature timestamp. For testing or
+// custom timestamps, use SignCBORAt.
+//
+//   - msgToEmbed: The message to sign (CBOR-encoded, embedded in COSE_Sign1)
+//   - msgToAuth: Additional authenticated data (CBOR-encoded, not embedded, but signed)
+//   - signer: The xDSA secret key to sign with
+//
+// Returns the serialized COSE_Sign1 structure.
+func SignCBOR(msgToEmbed, msgToAuth any, signer *xdsa.SecretKey) ([]byte, error) {
+	embed, err := cbor.Marshal(msgToEmbed)
+	if err != nil {
+		return nil, err
+	}
+	auth, err := cbor.Marshal(msgToAuth)
+	if err != nil {
+		return nil, err
+	}
+	return Sign(embed, auth, signer), nil
+}
+
 // Sign creates a COSE_Sign1 digital signature of the msgToEmbed.
+//
+// Uses the current system time as the signature timestamp. For testing or
+// custom timestamps, use SignAt.
 //
 //   - msgToEmbed: The message to sign (embedded in COSE_Sign1)
 //   - msgToAuth: Additional authenticated data (not embedded, but signed)
@@ -119,8 +157,45 @@ type encStructure struct {
 //
 // Returns the serialized COSE_Sign1 structure.
 func Sign(msgToEmbed, msgToAuth []byte, signer *xdsa.SecretKey) []byte {
+	return SignAt(msgToEmbed, msgToAuth, signer, time.Now().Unix())
+}
+
+// SignCBORAt creates a COSE_Sign1 digital signature of a CBOR-encodable message
+// with an explicit timestamp.
+//
+//   - msgToEmbed: The message to sign (CBOR-encoded, embedded in COSE_Sign1)
+//   - msgToAuth: Additional authenticated data (CBOR-encoded, not embedded, but signed)
+//   - signer: The xDSA secret key to sign with
+//   - timestamp: Unix timestamp in seconds to embed in the protected header
+//
+// Returns the serialized COSE_Sign1 structure.
+func SignCBORAt(msgToEmbed, msgToAuth any, signer *xdsa.SecretKey, timestamp int64) ([]byte, error) {
+	embed, err := cbor.Marshal(msgToEmbed)
+	if err != nil {
+		return nil, err
+	}
+	auth, err := cbor.Marshal(msgToAuth)
+	if err != nil {
+		return nil, err
+	}
+	return SignAt(embed, auth, signer, timestamp), nil
+}
+
+// SignAt creates a COSE_Sign1 digital signature with an explicit timestamp.
+//
+//   - msgToEmbed: The message to sign (embedded in COSE_Sign1)
+//   - msgToAuth: Additional authenticated data (not embedded, but signed)
+//   - signer: The xDSA secret key to sign with
+//   - timestamp: Unix timestamp in seconds to embed in the protected header
+//
+// Returns the serialized COSE_Sign1 structure.
+func SignAt(msgToEmbed, msgToAuth []byte, signer *xdsa.SecretKey, timestamp int64) []byte {
 	// Build protected header
-	protected, err := cbor.Marshal(&protectedHeader{Algorithm: algorithmXDSA})
+	protected, err := cbor.Marshal(&sigProtectedHeader{
+		Algorithm: algorithmXDSA,
+		Kid:       signer.Fingerprint(),
+		Timestamp: timestamp,
+	})
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
@@ -151,22 +226,60 @@ func Sign(msgToEmbed, msgToAuth []byte, signer *xdsa.SecretKey) []byte {
 	return result
 }
 
+// VerifyCBOR validates a COSE_Sign1 digital signature and returns the payload.
+//
+//   - msgToCheck: The serialized COSE_Sign1 structure
+//   - msgToAuth: The same additional authenticated data used during signing (CBOR-encoded)
+//   - verifier: The xDSA public key to verify against
+//   - maxDrift: Signatures more in the past or future are rejected
+//
+// Returns the CBOR-decoded payload if verification succeeds.
+func VerifyCBOR[T any](msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, maxDrift *uint64) (T, error) {
+	var zero T
+	auth, err := cbor.Marshal(msgToAuth)
+	if err != nil {
+		return zero, err
+	}
+	payload, err := Verify(msgToCheck, auth, verifier, maxDrift)
+	if err != nil {
+		return zero, err
+	}
+	var result T
+	if err := cbor.Unmarshal(payload, &result); err != nil {
+		return zero, err
+	}
+	return result, nil
+}
+
 // Verify validates a COSE_Sign1 digital signature and returns the payload.
 //
 //   - msgToCheck: The serialized COSE_Sign1 structure
 //   - msgToAuth: The same additional authenticated data used during signing
 //   - verifier: The xDSA public key to verify against
+//   - maxDrift: Signatures more in the past or future are rejected
 //
 // Returns the embedded payload if verification succeeds.
-func Verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey) ([]byte, error) {
+func Verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, maxDrift *uint64) ([]byte, error) {
 	// Parse COSE_Sign1
 	var sign1 coseSign1
 	if err := cbor.Unmarshal(msgToCheck, &sign1); err != nil {
 		return nil, err
 	}
 	// Verify the protected header
-	if err := verifyProtectedHeader(sign1.Protected, algorithmXDSA); err != nil {
+	header, err := verifySigProtectedHeader(sign1.Protected, algorithmXDSA)
+	if err != nil {
 		return nil, err
+	}
+	// Check signature timestamp drift if maxDrift is specified
+	if maxDrift != nil {
+		now := time.Now().Unix()
+		drift := now - header.Timestamp
+		if drift < 0 {
+			drift = -drift
+		}
+		if uint64(drift) > *maxDrift {
+			return nil, fmt.Errorf("%w: time drift %ds exceeds max %ds", ErrSignatureStale, drift, *maxDrift)
+		}
 	}
 	// Reconstruct Sig_structure to verify
 	sig := sigStructure{
@@ -184,7 +297,10 @@ func Verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey) ([]byte, err
 	return sign1.Payload, nil
 }
 
-// Seal signs a message then encrypts it to a recipient.
+// SealCBOR signs a message then encrypts it to a recipient.
+//
+// Uses the current system time as the signature timestamp. For testing or custom
+// timestamps, use SealCBORAt.
 //
 //   - msgToSeal: The message to sign and encrypt
 //   - msgToAuth: Additional authenticated data (signed and bound to encryption, but not embedded)
@@ -193,12 +309,67 @@ func Verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey) ([]byte, err
 //   - domain: Application domain for HPKE key derivation
 //
 // Returns the serialized COSE_Encrypt0 structure containing the encrypted COSE_Sign1.
-func Seal(msgToSeal, msgToAuth []byte, signer *xdsa.SecretKey, recipient *xhpke.PublicKey, domain string) ([]byte, error) {
-	// Create a COSE_Sign1 with the payload, binding the AAD
-	signed := Sign(msgToSeal, msgToAuth, signer)
+func SealCBOR(msgToSeal, msgToAuth any, signer *xdsa.SecretKey, recipient *xhpke.PublicKey, domain []byte) ([]byte, error) {
+	seal, err := cbor.Marshal(msgToSeal)
+	if err != nil {
+		return nil, err
+	}
+	auth, err := cbor.Marshal(msgToAuth)
+	if err != nil {
+		return nil, err
+	}
+	return Seal(seal, auth, signer, recipient, domain)
+}
 
-	// Build protected header
-	protected, err := cbor.Marshal(&protectedHeader{Algorithm: algorithmXHPKE})
+// Seal signs a message then encrypts it to a recipient.
+//
+// Uses the current system time as the signature timestamp. For testing or
+// custom timestamps, use SealAt.
+//
+//   - msgToSeal: The message to sign and encrypt
+//   - msgToAuth: Additional authenticated data (signed and bound to encryption, but not embedded)
+//   - signer: The xDSA secret key to sign with
+//   - recipient: The xHPKE public key to encrypt to
+//   - domain: Application domain for HPKE key derivation
+//
+// Returns the serialized COSE_Encrypt0 structure containing the encrypted COSE_Sign1.
+func Seal(msgToSeal, msgToAuth []byte, signer *xdsa.SecretKey, recipient *xhpke.PublicKey, domain []byte) ([]byte, error) {
+	return SealAt(msgToSeal, msgToAuth, signer, recipient, domain, time.Now().Unix())
+}
+
+// SealCBORAt signs a CBOR-encodable message then encrypts it to a recipient
+// with an explicit timestamp.
+func SealCBORAt(msgToSeal, msgToAuth any, signer *xdsa.SecretKey, recipient *xhpke.PublicKey, domain []byte, timestamp int64) ([]byte, error) {
+	seal, err := cbor.Marshal(msgToSeal)
+	if err != nil {
+		return nil, err
+	}
+	auth, err := cbor.Marshal(msgToAuth)
+	if err != nil {
+		return nil, err
+	}
+	return SealAt(seal, auth, signer, recipient, domain, timestamp)
+}
+
+// SealAt signs a message then encrypts it to a recipient with an explicit timestamp.
+//
+//   - msgToSeal: The message to sign and encrypt
+//   - msgToAuth: Additional authenticated data (signed and bound to encryption, but not embedded)
+//   - signer: The xDSA secret key to sign with
+//   - recipient: The xHPKE public key to encrypt to
+//   - domain: Application domain for HPKE key derivation
+//   - timestamp: Unix timestamp in seconds to embed in the signature's protected header
+//
+// Returns the serialized COSE_Encrypt0 structure containing the encrypted COSE_Sign1.
+func SealAt(msgToSeal, msgToAuth []byte, signer *xdsa.SecretKey, recipient *xhpke.PublicKey, domain []byte, timestamp int64) ([]byte, error) {
+	// Create a COSE_Sign1 with the payload, binding the AAD
+	signed := SignAt(msgToSeal, msgToAuth, signer, timestamp)
+
+	// Build protected header with recipient's fingerprint
+	protected, err := cbor.Marshal(&encProtectedHeader{
+		Algorithm: algorithmXHPKE,
+		Kid:       recipient.Fingerprint(),
+	})
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
@@ -231,6 +402,33 @@ func Seal(msgToSeal, msgToAuth []byte, signer *xdsa.SecretKey, recipient *xhpke.
 	return result, nil
 }
 
+// OpenCBOR decrypts and verifies a sealed message, returning the payload.
+//
+//   - msgToOpen: The serialized COSE_Encrypt0 structure
+//   - msgToAuth: The same additional authenticated data used during sealing (CBOR-encoded)
+//   - recipient: The xHPKE secret key to decrypt with
+//   - sender: The xDSA public key to verify the signature against
+//   - domain: Application domain for HPKE key derivation
+//   - maxDrift: Signatures more in the past or future are rejected
+//
+// Returns the CBOR-decoded payload if decryption and verification succeed.
+func OpenCBOR[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain []byte, maxDrift *uint64) (T, error) {
+	var zero T
+	auth, err := cbor.Marshal(msgToAuth)
+	if err != nil {
+		return zero, err
+	}
+	payload, err := Open(msgToOpen, auth, recipient, sender, domain, maxDrift)
+	if err != nil {
+		return zero, err
+	}
+	var result T
+	if err := cbor.Unmarshal(payload, &result); err != nil {
+		return zero, err
+	}
+	return result, nil
+}
+
 // Open decrypts and verifies a sealed message.
 //
 //   - msgToOpen: The serialized COSE_Encrypt0 structure
@@ -238,16 +436,17 @@ func Seal(msgToSeal, msgToAuth []byte, signer *xdsa.SecretKey, recipient *xhpke.
 //   - recipient: The xHPKE secret key to decrypt with
 //   - sender: The xDSA public key to verify the signature against
 //   - domain: Application domain for HPKE key derivation
+//   - maxDrift: Signatures more in the past or future are rejected
 //
 // Returns the original payload if decryption and verification succeed.
-func Open(msgToOpen, msgToAuth []byte, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain string) ([]byte, error) {
+func Open(msgToOpen, msgToAuth []byte, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain []byte, maxDrift *uint64) ([]byte, error) {
 	// Parse COSE_Encrypt0
 	var encrypt0 coseEncrypt0
 	if err := cbor.Unmarshal(msgToOpen, &encrypt0); err != nil {
 		return nil, err
 	}
 	// Verify protected header
-	if err := verifyProtectedHeader(encrypt0.Protected, algorithmXHPKE); err != nil {
+	if _, err := verifyEncProtectedHeader(encrypt0.Protected, algorithmXHPKE); err != nil {
 		return nil, err
 	}
 	// Extract encapsulated key from the unprotected headers
@@ -273,17 +472,29 @@ func Open(msgToOpen, msgToAuth []byte, recipient *xhpke.SecretKey, sender *xdsa.
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
 	// Verify the signature and extract the payload
-	return Verify(signed, msgToAuth, sender)
+	return Verify(signed, msgToAuth, sender, maxDrift)
 }
 
-// verifyProtectedHeader verifies the protected header contains exactly the expected algorithm.
-func verifyProtectedHeader(data []byte, expectedAlg int64) error {
-	var header protectedHeader
+// verifySigProtectedHeader verifies the signature protected header contains exactly the expected algorithm.
+func verifySigProtectedHeader(data []byte, expectedAlg int64) (*sigProtectedHeader, error) {
+	var header sigProtectedHeader
 	if err := cbor.Unmarshal(data, &header); err != nil {
-		return err
+		return nil, err
 	}
 	if header.Algorithm != expectedAlg {
-		return fmt.Errorf("%w: got %d, want %d", ErrUnexpectedAlgorithm, header.Algorithm, expectedAlg)
+		return nil, fmt.Errorf("%w: got %d, want %d", ErrUnexpectedAlgorithm, header.Algorithm, expectedAlg)
 	}
-	return nil
+	return &header, nil
+}
+
+// verifyEncProtectedHeader verifies the encryption protected header contains exactly the expected algorithm.
+func verifyEncProtectedHeader(data []byte, expectedAlg int64) (*encProtectedHeader, error) {
+	var header encProtectedHeader
+	if err := cbor.Unmarshal(data, &header); err != nil {
+		return nil, err
+	}
+	if header.Algorithm != expectedAlg {
+		return nil, fmt.Errorf("%w: got %d, want %d", ErrUnexpectedAlgorithm, header.Algorithm, expectedAlg)
+	}
+	return &header, nil
 }
