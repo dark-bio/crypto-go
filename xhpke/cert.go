@@ -24,7 +24,7 @@ type xdsaSigner struct {
 
 // Sign signs the message and returns the signature.
 func (s *xdsaSigner) Sign(message []byte) [xdsa.SignatureSize]byte {
-	return s.key.Sign(message)
+	return s.key.Sign(message).Marshal()
 }
 
 // PublicKey returns the issuer's public key.
@@ -75,7 +75,7 @@ func ParseCertDER(der []byte, signer *xdsa.PublicKey) (*PublicKey, uint64, uint6
 	var sig [xdsa.SignatureSize]byte
 	copy(sig[:], cert.Signature)
 
-	if err := signer.Verify(cert.RawTBSCertificate, sig); err != nil {
+	if err := signer.Verify(cert.RawTBSCertificate, xdsa.ParseSignature(sig)); err != nil {
 		return nil, 0, 0, err
 	}
 	// Extract the embedded public key

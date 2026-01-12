@@ -10,6 +10,9 @@ import (
 	"bytes"
 	"encoding/hex"
 	"testing"
+
+	"github.com/dark-bio/crypto-go/eddsa"
+	"github.com/dark-bio/crypto-go/mldsa"
 )
 
 // Test vectors from draft-ietf-lamps-pq-composite-sigs-latest Appendix E
@@ -235,7 +238,7 @@ func TestIETFVectors(t *testing.T) {
 	expectedSig, _ := hex.DecodeString(ietfVectors.Signature)
 	var expectedSigArray [SignatureSize]byte
 	copy(expectedSigArray[:], expectedSig)
-	if err := pubkey.Verify([]byte(ietfVectors.Message), expectedSigArray); err != nil {
+	if err := pubkey.Verify([]byte(ietfVectors.Message), ParseSignature(expectedSigArray)); err != nil {
 		t.Fatalf("failed to verify IETF signature: %v", err)
 	}
 }
@@ -356,5 +359,78 @@ func TestPublicKeyDERNonZeroUnusedBits(t *testing.T) {
 	_, err := ParsePublicKeyDER(malformedDER)
 	if err == nil {
 		t.Fatal("expected error for BIT STRING with non-zero unused bits, got nil")
+	}
+}
+
+func TestSecretKeyComposeSplit(t *testing.T) {
+	mlKey := mldsa.GenerateKey()
+	edKey := eddsa.GenerateKey()
+
+	mlBytes := mlKey.Marshal()
+	edBytes := edKey.Marshal()
+
+	composite := ComposeSecretKey(mlKey, edKey)
+	mlKey2, edKey2 := composite.Split()
+
+	if mlKey2.Marshal() != mlBytes {
+		t.Fatal("ML-DSA secret key mismatch after compose/split")
+	}
+	if edKey2.Marshal() != edBytes {
+		t.Fatal("Ed25519 secret key mismatch after compose/split")
+	}
+}
+
+func TestPublicKeyComposeSplit(t *testing.T) {
+	mlKey := mldsa.GenerateKey().PublicKey()
+	edKey := eddsa.GenerateKey().PublicKey()
+
+	mlBytes := mlKey.Marshal()
+	edBytes := edKey.Marshal()
+
+	composite := ComposePublicKey(mlKey, edKey)
+	mlKey2, edKey2 := composite.Split()
+
+	if mlKey2.Marshal() != mlBytes {
+		t.Fatal("ML-DSA public key mismatch after compose/split")
+	}
+	if edKey2.Marshal() != edBytes {
+		t.Fatal("Ed25519 public key mismatch after compose/split")
+	}
+}
+
+func TestSignatureComposeSplit(t *testing.T) {
+	mlSec := mldsa.GenerateKey()
+	edSec := eddsa.GenerateKey()
+
+	message := []byte("test message")
+	mlSig := mlSec.Sign(message, nil)
+	edSig := edSec.Sign(message)
+
+	mlBytes := mlSig.Marshal()
+	edBytes := edSig.Marshal()
+
+	composite := ComposeSignature(mlSig, edSig)
+	mlSig2, edSig2 := composite.Split()
+
+	if mlSig2.Marshal() != mlBytes {
+		t.Fatal("ML-DSA signature mismatch after compose/split")
+	}
+	if edSig2.Marshal() != edBytes {
+		t.Fatal("Ed25519 signature mismatch after compose/split")
+	}
+}
+
+func TestComposeSignVerify(t *testing.T) {
+	mlSec := mldsa.GenerateKey()
+	edSec := eddsa.GenerateKey()
+
+	compositeSec := ComposeSecretKey(mlSec, edSec)
+	compositePub := compositeSec.PublicKey()
+
+	message := []byte("message to sign with composite key")
+	signature := compositeSec.Sign(message)
+
+	if err := compositePub.Verify(message, signature); err != nil {
+		t.Fatalf("failed to verify composite signature: %v", err)
 	}
 }

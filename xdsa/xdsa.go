@@ -10,7 +10,6 @@
 package xdsa
 
 import (
-	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -18,9 +17,9 @@ import (
 	"encoding/asn1"
 	"errors"
 
-	"filippo.io/edwards25519"
-	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
+	"github.com/dark-bio/crypto-go/eddsa"
 	"github.com/dark-bio/crypto-go/internal/asn1ext"
+	"github.com/dark-bio/crypto-go/mldsa"
 	"github.com/dark-bio/crypto-go/pem"
 )
 
@@ -51,9 +50,8 @@ var OID = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 6, 48}
 // SecretKey contains a composite ML-DSA-65 + Ed25519 private key for creating
 // quantum-resistant digital signatures.
 type SecretKey struct {
-	mlKey  *mldsa65.PrivateKey
-	mlSeed [mldsa65.SeedSize]byte
-	edKey  ed25519.PrivateKey
+	mlKey *mldsa.SecretKey
+	edKey *eddsa.SecretKey
 }
 
 // GenerateKey creates a new, random private key.
@@ -65,24 +63,34 @@ func GenerateKey() *SecretKey {
 	return ParseSecretKey(seed)
 }
 
+// ComposeSecretKey creates a secret key from its constituent ML-DSA-65 and
+// Ed25519 secret keys.
+func ComposeSecretKey(mlKey *mldsa.SecretKey, edKey *eddsa.SecretKey) *SecretKey {
+	return &SecretKey{mlKey: mlKey, edKey: edKey}
+}
+
+// Split decomposes a secret key into its constituent ML-DSA-65 and Ed25519
+// secret keys.
+func (k *SecretKey) Split() (*mldsa.SecretKey, *eddsa.SecretKey) {
+	return k.mlKey, k.edKey
+}
+
 // ParseSecretKey creates a private key from a 64-byte seed.
 func ParseSecretKey(seed [SecretKeySize]byte) *SecretKey {
-	var mlSeed [mldsa65.SeedSize]byte
-	copy(mlSeed[:], seed[:32])
+	var mlSeed [mldsa.SecretKeySize]byte
+	var edSeed [eddsa.SecretKeySize]byte
 
-	_, mlKey := mldsa65.NewKeyFromSeed(&mlSeed)
-	edKey := ed25519.NewKeyFromSeed(seed[32:])
+	copy(mlSeed[:], seed[:32])
+	copy(edSeed[:], seed[32:])
 
 	return &SecretKey{
-		mlKey:  mlKey,
-		mlSeed: mlSeed,
-		edKey:  edKey,
+		mlKey: mldsa.ParseSecretKey(mlSeed),
+		edKey: eddsa.ParseSecretKey(edSeed),
 	}
 }
 
-// ParseSecretKeyDER parses a DER buffer into a private key..
+// ParseSecretKeyDER parses a DER buffer into a private key.
 func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
-	// Parse the DER encoded container
 	info, err := asn1ext.ParsePKCS8PrivateKey(der)
 	if err != nil {
 		return nil, err
@@ -90,15 +98,12 @@ func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	if info.Version != 0 {
 		return nil, errors.New("xdsa: unsupported version")
 	}
-	// Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512 (1.3.6.1.5.5.7.6.48)
 	if !info.Algorithm.Algorithm.Equal(OID) {
 		return nil, errors.New("xdsa: not a composite ML-DSA-65-Ed25519-SHA512 private key")
 	}
-	// Private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
 	if len(info.PrivateKey) != 64 {
 		return nil, errors.New("xdsa: composite private key must be 64 bytes")
 	}
-	// Everything seems fine, instantiate the key
 	var seed [SecretKeySize]byte
 	copy(seed[:], info.PrivateKey)
 	return ParseSecretKey(seed), nil
@@ -139,18 +144,19 @@ func MustParseSecretKeyPEM(s string) *SecretKey {
 // Marshal converts a secret key into a 64-byte array.
 func (k *SecretKey) Marshal() [SecretKeySize]byte {
 	var out [SecretKeySize]byte
-	copy(out[:32], k.mlSeed[:])
-	copy(out[32:], k.edKey.Seed())
+
+	mlSeed := k.mlKey.Marshal()
+	edSeed := k.edKey.Marshal()
+
+	copy(out[:32], mlSeed[:])
+	copy(out[32:], edSeed[:])
 	return out
 }
 
 // MarshalDER serializes a private key into a DER buffer.
 func (k *SecretKey) MarshalDER() []byte {
-	// The private key is ML-DSA seed (32) || Ed25519 seed (32) = 64 bytes
 	seed := k.Marshal()
 
-	// Create the MLDSA65-Ed25519-SHA512 algorithm identifier; parameters
-	// MUST be absent
 	info := asn1ext.PKCS8PrivateKey{
 		Version: 0,
 		Algorithm: pkix.AlgorithmIdentifier{
@@ -173,8 +179,8 @@ func (k *SecretKey) MarshalPEM() string {
 // PublicKey retrieves the public counterpart of the secret key.
 func (k *SecretKey) PublicKey() *PublicKey {
 	return &PublicKey{
-		mlKey: k.mlKey.Public().(*mldsa65.PublicKey),
-		edKey: k.edKey.Public().(ed25519.PublicKey),
+		mlKey: k.mlKey.PublicKey(),
+		edKey: k.edKey.PublicKey(),
 	}
 }
 
@@ -184,7 +190,7 @@ func (k *SecretKey) Fingerprint() [32]byte {
 }
 
 // Sign creates a digital signature of the message.
-func (k *SecretKey) Sign(message []byte) [SignatureSize]byte {
+func (k *SecretKey) Sign(message []byte) *Signature {
 	// Construct M' = Prefix || Label || len(ctx) || ctx || PH(M)
 	// where ctx is empty and PH is SHA512
 	prehash := sha512.Sum512(message)
@@ -195,41 +201,53 @@ func (k *SecretKey) Sign(message []byte) [SignatureSize]byte {
 	mPrime = append(mPrime, 0) // len(ctx) = 0
 	mPrime = append(mPrime, prehash[:]...)
 
-	// Sign M' with both algorithms, as ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
+	// Sign M' with both algorithms
+	mlSig := k.mlKey.Sign(mPrime, []byte(signatureDomain))
+	edSig := k.edKey.Sign(mPrime)
+
+	// Concatenate: ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
 	var sig [SignatureSize]byte
+	mlSigBytes := mlSig.Marshal()
+	edSigBytes := edSig.Marshal()
+	copy(sig[:3309], mlSigBytes[:])
+	copy(sig[3309:], edSigBytes[:])
 
-	mldsa65.SignTo(k.mlKey, mPrime, []byte(signatureDomain), false, sig[:3309])
-	edSig := ed25519.Sign(k.edKey, mPrime)
-	copy(sig[3309:], edSig)
-
-	return sig
+	return &Signature{inner: sig}
 }
 
 // PublicKey is an ML-DSA-65 public key paired with an Ed25519 public key for
 // verifying quantum resistant digital signatures.
 type PublicKey struct {
-	mlKey *mldsa65.PublicKey
-	edKey ed25519.PublicKey
+	mlKey *mldsa.PublicKey
+	edKey *eddsa.PublicKey
+}
+
+// ComposePublicKey creates a public key from its constituent ML-DSA-65 and
+// Ed25519 public keys.
+func ComposePublicKey(mlKey *mldsa.PublicKey, edKey *eddsa.PublicKey) *PublicKey {
+	return &PublicKey{mlKey: mlKey, edKey: edKey}
+}
+
+// Split decomposes a public key into its constituent ML-DSA-65 and Ed25519
+// public keys.
+func (k *PublicKey) Split() (*mldsa.PublicKey, *eddsa.PublicKey) {
+	return k.mlKey, k.edKey
 }
 
 // ParsePublicKey converts a 1984-byte array into a public key.
 func ParsePublicKey(b [PublicKeySize]byte) (*PublicKey, error) {
-	var mlBytes [mldsa65.PublicKeySize]byte
-	copy(mlBytes[:], b[:1952])
+	var mlBytes [mldsa.PublicKeySize]byte
+	var edBytes [eddsa.PublicKeySize]byte
 
-	// Parse the ML-DSA key, this cannot fail
-	mlKey := new(mldsa65.PublicKey)
-	if err := mlKey.UnmarshalBinary(mlBytes[:]); err != nil {
-		panic(err) // cannot fail
-	}
-	// Parse Ed25519, this can fail with an invalid curve point
-	if _, err := new(edwards25519.Point).SetBytes(b[1952:]); err != nil {
+	copy(mlBytes[:], b[:1952])
+	copy(edBytes[:], b[1952:])
+
+	edKey, err := eddsa.ParsePublicKey(edBytes)
+	if err != nil {
 		return nil, errors.New("xdsa: invalid Ed25519 public key")
 	}
-	edKey := ed25519.PublicKey(b[1952:])
-
 	return &PublicKey{
-		mlKey: mlKey,
+		mlKey: mldsa.ParsePublicKey(mlBytes),
 		edKey: edKey,
 	}, nil
 }
@@ -246,16 +264,13 @@ func MustParsePublicKey(b [PublicKeySize]byte) *PublicKey {
 
 // ParsePublicKeyDER parses a DER buffer into a public key.
 func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
-	// Parse the DER encoded container
 	info, err := asn1ext.ParseSubjectPublicKeyInfo(der)
 	if err != nil {
 		return nil, err
 	}
-	// Ensure the algorithm OID matches MLDSA65-Ed25519-SHA512 (1.3.6.1.5.5.7.6.48)
 	if !info.Algorithm.Algorithm.Equal(OID) {
 		return nil, errors.New("xdsa: not a composite ML-DSA-65-Ed25519-SHA512 public key")
 	}
-	// Public key is ML-DSA-65 (1952 bytes) || Ed25519 (32 bytes) = 1984 bytes.
 	keyBytes := info.SubjectPublicKey.Bytes
 	if len(keyBytes) != PublicKeySize {
 		return nil, errors.New("xdsa: composite public key must be 1984 bytes")
@@ -263,7 +278,6 @@ func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	if info.SubjectPublicKey.BitLength != PublicKeySize*8 {
 		return nil, errors.New("xdsa: public key BIT STRING must be byte-aligned")
 	}
-	// Everything seems fine, instantiate the key
 	var b [PublicKeySize]byte
 	copy(b[:], keyBytes)
 	return ParsePublicKey(b)
@@ -305,20 +319,19 @@ func MustParsePublicKeyPEM(s string) *PublicKey {
 func (k *PublicKey) Marshal() [PublicKeySize]byte {
 	var out [PublicKeySize]byte
 
-	mlBytes, _ := k.mlKey.MarshalBinary()
-	copy(out[:1952], mlBytes)
-	copy(out[1952:], k.edKey)
+	mlBytes := k.mlKey.Marshal()
+	edBytes := k.edKey.Marshal()
+
+	copy(out[:1952], mlBytes[:])
+	copy(out[1952:], edBytes[:])
 
 	return out
 }
 
 // MarshalDER serializes a public key into a DER buffer.
 func (k *PublicKey) MarshalDER() []byte {
-	// The public key info is the BITSTRING of the two keys concatenated
 	pubBytes := k.Marshal()
 
-	// Create the MLDSA65-Ed25519-SHA512 algorithm identifier; parameters
-	// MUST be absent
 	info := asn1ext.SubjectPublicKeyInfo{
 		Algorithm: pkix.AlgorithmIdentifier{
 			Algorithm: OID,
@@ -344,7 +357,7 @@ func (k *PublicKey) Fingerprint() [32]byte {
 }
 
 // Verify verifies a digital signature.
-func (k *PublicKey) Verify(message []byte, sig [SignatureSize]byte) error {
+func (k *PublicKey) Verify(message []byte, sig *Signature) error {
 	// Construct M' = Prefix || Label || len(ctx) || ctx || PH(M)
 	// where ctx is empty and PH is SHA512
 	prehash := sha512.Sum512(message)
@@ -355,12 +368,54 @@ func (k *PublicKey) Verify(message []byte, sig [SignatureSize]byte) error {
 	mPrime = append(mPrime, 0) // len(ctx) = 0
 	mPrime = append(mPrime, prehash[:]...)
 
-	// Split and verify both signatures
-	if !mldsa65.Verify(k.mlKey, mPrime, []byte(signatureDomain), sig[:3309]) {
+	// Split signatures
+	var mlSig [mldsa.SignatureSize]byte
+	var edSig [eddsa.SignatureSize]byte
+	copy(mlSig[:], sig.inner[:3309])
+	copy(edSig[:], sig.inner[3309:])
+
+	// Verify both signatures
+	if err := k.mlKey.Verify(mPrime, []byte(signatureDomain), mldsa.ParseSignature(mlSig)); err != nil {
 		return errors.New("xdsa: ML-DSA signature verification failed")
 	}
-	if !ed25519.Verify(k.edKey, mPrime, sig[3309:]) {
+	if err := k.edKey.Verify(mPrime, eddsa.ParseSignature(edSig)); err != nil {
 		return errors.New("xdsa: Ed25519 signature verification failed")
 	}
 	return nil
+}
+
+// Signature contains a composite ML-DSA-65 + Ed25519 signature.
+type Signature struct {
+	inner [SignatureSize]byte
+}
+
+// ComposeSignature creates a signature from its constituent ML-DSA-65 and
+// Ed25519 signatures.
+func ComposeSignature(mlSig *mldsa.Signature, edSig *eddsa.Signature) *Signature {
+	var sig [SignatureSize]byte
+	mlBytes := mlSig.Marshal()
+	edBytes := edSig.Marshal()
+	copy(sig[:mldsa.SignatureSize], mlBytes[:])
+	copy(sig[mldsa.SignatureSize:], edBytes[:])
+	return &Signature{inner: sig}
+}
+
+// Split decomposes a signature into its constituent ML-DSA-65 and Ed25519
+// signatures.
+func (s *Signature) Split() (*mldsa.Signature, *eddsa.Signature) {
+	var mlSig [mldsa.SignatureSize]byte
+	var edSig [eddsa.SignatureSize]byte
+	copy(mlSig[:], s.inner[:mldsa.SignatureSize])
+	copy(edSig[:], s.inner[mldsa.SignatureSize:])
+	return mldsa.ParseSignature(mlSig), eddsa.ParseSignature(edSig)
+}
+
+// ParseSignature converts a 3373-byte array into a signature.
+func ParseSignature(b [SignatureSize]byte) *Signature {
+	return &Signature{inner: b}
+}
+
+// Marshal converts a signature into a 3373-byte array.
+func (s *Signature) Marshal() [SignatureSize]byte {
+	return s.inner
 }
