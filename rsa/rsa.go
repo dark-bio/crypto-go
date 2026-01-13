@@ -426,6 +426,27 @@ func (s *Signature) Marshal() [SignatureSize]byte {
 	return s.inner
 }
 
+// MarshalText implements encoding.TextMarshaler.
+func (s *Signature) MarshalText() ([]byte, error) {
+	raw := s.Marshal()
+	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *Signature) UnmarshalText(text []byte) error {
+	raw, err := base64.StdEncoding.DecodeString(string(text))
+	if err != nil {
+		return err
+	}
+	if len(raw) != SignatureSize {
+		return errors.New("rsa: invalid signature length")
+	}
+	var b [SignatureSize]byte
+	copy(b[:], raw)
+	*s = *ParseSignature(b)
+	return nil
+}
+
 func reverseBytes(b []byte) []byte {
 	out := make([]byte, len(b))
 	for i := range b {
