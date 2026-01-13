@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
+	"encoding/base64"
 	"errors"
 
 	"filippo.io/edwards25519"
@@ -246,6 +247,31 @@ func (k *PublicKey) MarshalDER() []byte {
 // MarshalPEM serializes a public key into a PEM string.
 func (k *PublicKey) MarshalPEM() string {
 	return string(pem.Encode("PUBLIC KEY", k.MarshalDER()))
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (k *PublicKey) MarshalText() ([]byte, error) {
+	raw := k.Marshal()
+	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (k *PublicKey) UnmarshalText(text []byte) error {
+	raw, err := base64.StdEncoding.DecodeString(string(text))
+	if err != nil {
+		return err
+	}
+	if len(raw) != PublicKeySize {
+		return errors.New("eddsa: invalid public key length")
+	}
+	var b [PublicKeySize]byte
+	copy(b[:], raw)
+	key, err := ParsePublicKey(b)
+	if err != nil {
+		return err
+	}
+	*k = *key
+	return nil
 }
 
 // Fingerprint returns a 256-bit unique identifier for this key.

@@ -15,6 +15,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/base64"
 	"errors"
 
 	"github.com/dark-bio/crypto-go/internal/asn1ext"
@@ -309,6 +310,31 @@ func (k *PublicKey) MarshalPEM() string {
 func (k *PublicKey) Fingerprint() [32]byte {
 	raw := k.Marshal()
 	return sha256.Sum256(raw[:])
+}
+
+// MarshalText encodes the public key as base64 text.
+func (k *PublicKey) MarshalText() ([]byte, error) {
+	raw := k.Marshal()
+	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
+}
+
+// UnmarshalText decodes a base64-encoded public key.
+func (k *PublicKey) UnmarshalText(text []byte) error {
+	raw, err := base64.StdEncoding.DecodeString(string(text))
+	if err != nil {
+		return err
+	}
+	if len(raw) != PublicKeySize {
+		return errors.New("xhpke: invalid public key length")
+	}
+	var b [PublicKeySize]byte
+	copy(b[:], raw)
+	key, err := ParsePublicKey(b)
+	if err != nil {
+		return err
+	}
+	*k = *key
+	return nil
 }
 
 // Seal creates a standalone cryptographic construct encrypted to this public

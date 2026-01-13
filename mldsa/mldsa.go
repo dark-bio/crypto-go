@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/base64"
 	"errors"
 
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
@@ -282,6 +283,25 @@ func (k *PublicKey) Marshal() [PublicKeySize]byte {
 	bytes, _ := k.key.MarshalBinary()
 	copy(out[:], bytes)
 	return out
+}
+
+func (k *PublicKey) MarshalText() ([]byte, error) {
+	raw := k.Marshal()
+	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
+}
+
+func (k *PublicKey) UnmarshalText(text []byte) error {
+	raw, err := base64.StdEncoding.DecodeString(string(text))
+	if err != nil {
+		return err
+	}
+	if len(raw) != PublicKeySize {
+		return errors.New("mldsa: invalid public key length")
+	}
+	var b [PublicKeySize]byte
+	copy(b[:], raw)
+	*k = *ParsePublicKey(b)
+	return nil
 }
 
 // MarshalDER serializes a public key into a DER buffer.
