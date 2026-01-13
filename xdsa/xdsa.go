@@ -43,6 +43,9 @@ const (
 	// SignatureSize is the size of a composite signature in bytes.
 	// Format: ML-DSA (3309 bytes) || Ed25519 (64 bytes)
 	SignatureSize = 3373
+
+	// FingerprintSize is the size of a fingerprint in bytes.
+	FingerprintSize = 32
 )
 
 // OID is the ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
@@ -186,7 +189,7 @@ func (k *SecretKey) PublicKey() *PublicKey {
 }
 
 // Fingerprint returns a 256-bit unique identifier for this key.
-func (k *SecretKey) Fingerprint() [32]byte {
+func (k *SecretKey) Fingerprint() Fingerprint {
 	return k.PublicKey().Fingerprint()
 }
 
@@ -375,9 +378,9 @@ func (k *PublicKey) UnmarshalText(text []byte) error {
 }
 
 // Fingerprint returns a 256-bit unique identifier for this key.
-func (k *PublicKey) Fingerprint() [32]byte {
+func (k *PublicKey) Fingerprint() Fingerprint {
 	raw := k.Marshal()
-	return sha256.Sum256(raw[:])
+	return Fingerprint(sha256.Sum256(raw[:]))
 }
 
 // Verify verifies a digital signature.
@@ -462,5 +465,26 @@ func (s *Signature) UnmarshalText(text []byte) error {
 	var b [SignatureSize]byte
 	copy(b[:], raw)
 	*s = *ParseSignature(b)
+	return nil
+}
+
+// Fingerprint is a 256-bit unique identifier for a composite xDSA key.
+type Fingerprint [FingerprintSize]byte
+
+// MarshalText implements encoding.TextMarshaler.
+func (f Fingerprint) MarshalText() ([]byte, error) {
+	return []byte(base64.StdEncoding.EncodeToString(f[:])), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (f *Fingerprint) UnmarshalText(text []byte) error {
+	raw, err := base64.StdEncoding.DecodeString(string(text))
+	if err != nil {
+		return err
+	}
+	if len(raw) != FingerprintSize {
+		return errors.New("xdsa: invalid fingerprint length")
+	}
+	copy(f[:], raw)
 	return nil
 }

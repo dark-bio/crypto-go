@@ -35,6 +35,9 @@ const (
 
 	// EncapKeySize is the size of the encapsulated key in bytes.
 	EncapKeySize = 1120
+
+	// FingerprintSize is the size of a fingerprint in bytes.
+	FingerprintSize = 32
 )
 
 // OID is the ASN.1 object identifier for X-Wing.
@@ -166,7 +169,7 @@ func (k *SecretKey) PublicKey() *PublicKey {
 }
 
 // Fingerprint returns a 256-bit unique identifier for this key.
-func (k *SecretKey) Fingerprint() [32]byte {
+func (k *SecretKey) Fingerprint() Fingerprint {
 	return k.PublicKey().Fingerprint()
 }
 
@@ -307,9 +310,9 @@ func (k *PublicKey) MarshalPEM() string {
 }
 
 // Fingerprint returns a 256-bit unique identifier for this key.
-func (k *PublicKey) Fingerprint() [32]byte {
+func (k *PublicKey) Fingerprint() Fingerprint {
 	raw := k.Marshal()
-	return sha256.Sum256(raw[:])
+	return Fingerprint(sha256.Sum256(raw[:]))
 }
 
 // MarshalText encodes the public key as base64 text.
@@ -334,6 +337,27 @@ func (k *PublicKey) UnmarshalText(text []byte) error {
 		return err
 	}
 	*k = *key
+	return nil
+}
+
+// Fingerprint is a 256-bit unique identifier for an X-Wing key.
+type Fingerprint [FingerprintSize]byte
+
+// MarshalText implements encoding.TextMarshaler.
+func (f Fingerprint) MarshalText() ([]byte, error) {
+	return []byte(base64.StdEncoding.EncodeToString(f[:])), nil
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (f *Fingerprint) UnmarshalText(text []byte) error {
+	raw, err := base64.StdEncoding.DecodeString(string(text))
+	if err != nil {
+		return err
+	}
+	if len(raw) != FingerprintSize {
+		return errors.New("xhpke: invalid fingerprint length")
+	}
+	copy(f[:], raw)
 	return nil
 }
 
