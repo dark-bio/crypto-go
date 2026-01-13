@@ -151,9 +151,7 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 // Sign creates a digital signature of the message.
 func (k *SecretKey) Sign(message []byte) *Signature {
 	sig := ed25519.Sign(k.key, message)
-	var out [SignatureSize]byte
-	copy(out[:], sig)
-	return &Signature{inner: out}
+	return (*Signature)(sig)
 }
 
 // PublicKey contains an Ed25519 public key usable for verification.
@@ -285,31 +283,18 @@ func (k *PublicKey) Fingerprint() Fingerprint {
 
 // Verify verifies a digital signature.
 func (k *PublicKey) Verify(message []byte, sig *Signature) error {
-	if !ed25519.Verify(k.key, message, sig.inner[:]) {
+	if !ed25519.Verify(k.key, message, sig[:]) {
 		return errors.New("eddsa: signature verification failed")
 	}
 	return nil
 }
 
 // Signature contains an Ed25519 signature.
-type Signature struct {
-	inner [SignatureSize]byte
-}
-
-// ParseSignature converts a 64-byte array into a signature.
-func ParseSignature(b [SignatureSize]byte) *Signature {
-	return &Signature{inner: b}
-}
-
-// Marshal converts a signature into a 64-byte array.
-func (s *Signature) Marshal() [SignatureSize]byte {
-	return s.inner
-}
+type Signature [SignatureSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
 func (s *Signature) MarshalText() ([]byte, error) {
-	raw := s.Marshal()
-	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
+	return []byte(base64.StdEncoding.EncodeToString(s[:])), nil
 }
 
 // UnmarshalText implements encoding.TextUnmarshaler.
@@ -321,9 +306,7 @@ func (s *Signature) UnmarshalText(text []byte) error {
 	if len(raw) != SignatureSize {
 		return errors.New("eddsa: invalid signature length")
 	}
-	var b [SignatureSize]byte
-	copy(b[:], raw)
-	*s = *ParseSignature(b)
+	copy(s[:], raw)
 	return nil
 }
 
@@ -331,7 +314,7 @@ func (s *Signature) UnmarshalText(text []byte) error {
 type Fingerprint [FingerprintSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
-func (f Fingerprint) MarshalText() ([]byte, error) {
+func (f *Fingerprint) MarshalText() ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString(f[:])), nil
 }
 

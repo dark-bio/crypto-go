@@ -406,16 +406,16 @@ func TestSignatureComposeSplit(t *testing.T) {
 	mlSig := mlSec.Sign(message, nil)
 	edSig := edSec.Sign(message)
 
-	mlBytes := mlSig.Marshal()
-	edBytes := edSig.Marshal()
+	mlBytes := *mlSig
+	edBytes := *edSig
 
 	composite := ComposeSignature(mlSig, edSig)
 	mlSig2, edSig2 := composite.Split()
 
-	if mlSig2.Marshal() != mlBytes {
+	if *mlSig2 != mlBytes {
 		t.Fatal("ML-DSA signature mismatch after compose/split")
 	}
-	if edSig2.Marshal() != edBytes {
+	if *edSig2 != edBytes {
 		t.Fatal("Ed25519 signature mismatch after compose/split")
 	}
 }

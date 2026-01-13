@@ -227,9 +227,7 @@ func (k *SecretKey) Sign(message []byte) *Signature {
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	var out [SignatureSize]byte
-	copy(out[:], sig)
-	return &Signature{inner: out}
+	return (*Signature)(sig)
 }
 
 // PublicKey contains a 2048-bit RSA public key usable for verification, with
@@ -406,33 +404,20 @@ func (k *PublicKey) Fingerprint() Fingerprint {
 // Verify verifies a digital signature.
 func (k *PublicKey) Verify(message []byte, sig *Signature) error {
 	hash := sha256.Sum256(message)
-	return rsa.VerifyPKCS1v15(k.inner, crypto.SHA256, hash[:], sig.inner[:])
+	return rsa.VerifyPKCS1v15(k.inner, crypto.SHA256, hash[:], sig[:])
 }
 
 // VerifyHash verifies a digital signature on an already hashed message.
 func (k *PublicKey) VerifyHash(hash []byte, sig *Signature) error {
-	return rsa.VerifyPKCS1v15(k.inner, crypto.SHA256, hash, sig.inner[:])
+	return rsa.VerifyPKCS1v15(k.inner, crypto.SHA256, hash, sig[:])
 }
 
 // Signature contains an RSA-2048 signature.
-type Signature struct {
-	inner [SignatureSize]byte
-}
-
-// ParseSignature converts a 256-byte array into a signature.
-func ParseSignature(b [SignatureSize]byte) *Signature {
-	return &Signature{inner: b}
-}
-
-// Marshal converts a signature into a 256-byte array.
-func (s *Signature) Marshal() [SignatureSize]byte {
-	return s.inner
-}
+type Signature [SignatureSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
 func (s *Signature) MarshalText() ([]byte, error) {
-	raw := s.Marshal()
-	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
+	return []byte(base64.StdEncoding.EncodeToString(s[:])), nil
 }
 
 // UnmarshalText implements encoding.TextUnmarshaler.
@@ -444,9 +429,7 @@ func (s *Signature) UnmarshalText(text []byte) error {
 	if len(raw) != SignatureSize {
 		return errors.New("rsa: invalid signature length")
 	}
-	var b [SignatureSize]byte
-	copy(b[:], raw)
-	*s = *ParseSignature(b)
+	copy(s[:], raw)
 	return nil
 }
 
@@ -454,7 +437,7 @@ func (s *Signature) UnmarshalText(text []byte) error {
 type Fingerprint [FingerprintSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
-func (f Fingerprint) MarshalText() ([]byte, error) {
+func (f *Fingerprint) MarshalText() ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString(f[:])), nil
 }
 

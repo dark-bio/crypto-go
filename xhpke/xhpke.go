@@ -344,7 +344,7 @@ func (k *PublicKey) UnmarshalText(text []byte) error {
 type Fingerprint [FingerprintSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
-func (f Fingerprint) MarshalText() ([]byte, error) {
+func (f *Fingerprint) MarshalText() ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString(f[:])), nil
 }
 

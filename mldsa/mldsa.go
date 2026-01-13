@@ -206,9 +206,9 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 
 // Sign creates a digital signature of the message with an optional context string.
 func (k *SecretKey) Sign(message []byte, ctx []byte) *Signature {
-	var sig [SignatureSize]byte
+	var sig Signature
 	mldsa65.SignTo(k.key, message, ctx, false, sig[:])
-	return &Signature{inner: sig}
+	return &sig
 }
 
 // PublicKey contains an ML-DSA-65 public key for verifying digital signatures.
@@ -337,31 +337,18 @@ func (k *PublicKey) Fingerprint() Fingerprint {
 
 // Verify verifies a digital signature with an optional context string.
 func (k *PublicKey) Verify(message []byte, ctx []byte, sig *Signature) error {
-	if !mldsa65.Verify(k.key, message, ctx, sig.inner[:]) {
+	if !mldsa65.Verify(k.key, message, ctx, sig[:]) {
 		return errors.New("mldsa: signature verification failed")
 	}
 	return nil
 }
 
 // Signature contains an ML-DSA-65 signature.
-type Signature struct {
-	inner [SignatureSize]byte
-}
-
-// ParseSignature converts a 3309-byte array into a signature.
-func ParseSignature(b [SignatureSize]byte) *Signature {
-	return &Signature{inner: b}
-}
-
-// Marshal converts a signature into a 3309-byte array.
-func (s *Signature) Marshal() [SignatureSize]byte {
-	return s.inner
-}
+type Signature [SignatureSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
 func (s *Signature) MarshalText() ([]byte, error) {
-	raw := s.Marshal()
-	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
+	return []byte(base64.StdEncoding.EncodeToString(s[:])), nil
 }
 
 // UnmarshalText implements encoding.TextUnmarshaler.
@@ -373,9 +360,7 @@ func (s *Signature) UnmarshalText(text []byte) error {
 	if len(raw) != SignatureSize {
 		return errors.New("mldsa: invalid signature length")
 	}
-	var b [SignatureSize]byte
-	copy(b[:], raw)
-	*s = *ParseSignature(b)
+	copy(s[:], raw)
 	return nil
 }
 
@@ -383,7 +368,7 @@ func (s *Signature) UnmarshalText(text []byte) error {
 type Fingerprint [FingerprintSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
-func (f Fingerprint) MarshalText() ([]byte, error) {
+func (f *Fingerprint) MarshalText() ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString(f[:])), nil
 }
 

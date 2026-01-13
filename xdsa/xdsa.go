@@ -211,10 +211,8 @@ func (k *SecretKey) Sign(message []byte) *Signature {
 
 	// Concatenate: ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
 	var sig [SignatureSize]byte
-	mlSigBytes := mlSig.Marshal()
-	edSigBytes := edSig.Marshal()
-	copy(sig[:3309], mlSigBytes[:])
-	copy(sig[3309:], edSigBytes[:])
+	copy(sig[:3309], mlSig[:])
+	copy(sig[3309:], edSig[:])
 
 	return &Signature{inner: sig}
 }
@@ -396,16 +394,16 @@ func (k *PublicKey) Verify(message []byte, sig *Signature) error {
 	mPrime = append(mPrime, prehash[:]...)
 
 	// Split signatures
-	var mlSig [mldsa.SignatureSize]byte
-	var edSig [eddsa.SignatureSize]byte
+	var mlSig mldsa.Signature
+	var edSig eddsa.Signature
 	copy(mlSig[:], sig.inner[:3309])
 	copy(edSig[:], sig.inner[3309:])
 
 	// Verify both signatures
-	if err := k.mlKey.Verify(mPrime, []byte(signatureDomain), mldsa.ParseSignature(mlSig)); err != nil {
+	if err := k.mlKey.Verify(mPrime, []byte(signatureDomain), &mlSig); err != nil {
 		return errors.New("xdsa: ML-DSA signature verification failed")
 	}
-	if err := k.edKey.Verify(mPrime, eddsa.ParseSignature(edSig)); err != nil {
+	if err := k.edKey.Verify(mPrime, &edSig); err != nil {
 		return errors.New("xdsa: Ed25519 signature verification failed")
 	}
 	return nil
@@ -420,21 +418,19 @@ type Signature struct {
 // Ed25519 signatures.
 func ComposeSignature(mlSig *mldsa.Signature, edSig *eddsa.Signature) *Signature {
 	var sig [SignatureSize]byte
-	mlBytes := mlSig.Marshal()
-	edBytes := edSig.Marshal()
-	copy(sig[:mldsa.SignatureSize], mlBytes[:])
-	copy(sig[mldsa.SignatureSize:], edBytes[:])
+	copy(sig[:mldsa.SignatureSize], mlSig[:])
+	copy(sig[mldsa.SignatureSize:], edSig[:])
 	return &Signature{inner: sig}
 }
 
 // Split decomposes a signature into its constituent ML-DSA-65 and Ed25519
 // signatures.
 func (s *Signature) Split() (*mldsa.Signature, *eddsa.Signature) {
-	var mlSig [mldsa.SignatureSize]byte
-	var edSig [eddsa.SignatureSize]byte
+	var mlSig mldsa.Signature
+	var edSig eddsa.Signature
 	copy(mlSig[:], s.inner[:mldsa.SignatureSize])
 	copy(edSig[:], s.inner[mldsa.SignatureSize:])
-	return mldsa.ParseSignature(mlSig), eddsa.ParseSignature(edSig)
+	return &mlSig, &edSig
 }
 
 // ParseSignature converts a 3373-byte array into a signature.
@@ -472,7 +468,7 @@ func (s *Signature) UnmarshalText(text []byte) error {
 type Fingerprint [FingerprintSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
-func (f Fingerprint) MarshalText() ([]byte, error) {
+func (f *Fingerprint) MarshalText() ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString(f[:])), nil
 }
 
