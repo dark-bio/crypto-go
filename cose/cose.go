@@ -37,10 +37,11 @@ const (
 // Error types for COSE operations
 var (
 	ErrUnexpectedAlgorithm = errors.New("cose: unexpected algorithm")
+	ErrUnexpectedKey       = errors.New("cose: unexpected key")
+	ErrInvalidSignature    = errors.New("cose: signature verification failed")
+	ErrStaleSignature      = errors.New("cose: signature stale")
 	ErrInvalidEncapKeySize = errors.New("cose: invalid encapsulated key size")
-	ErrSignatureInvalid    = errors.New("cose: signature verification failed")
 	ErrDecryptionFailed    = errors.New("cose: decryption failed")
-	ErrSignatureStale      = errors.New("cose: signature stale")
 )
 
 // sigProtectedHeader is the protected header for COSE_Sign1.
@@ -266,7 +267,7 @@ func Verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, maxDrift *ui
 		return nil, err
 	}
 	// Verify the protected header
-	header, err := verifySigProtectedHeader(sign1.Protected, algorithmXDSA)
+	header, err := verifySigProtectedHeader(sign1.Protected, algorithmXDSA, verifier)
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +279,7 @@ func Verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, maxDrift *ui
 			drift = -drift
 		}
 		if uint64(drift) > *maxDrift {
-			return nil, fmt.Errorf("%w: time drift %ds exceeds max %ds", ErrSignatureStale, drift, *maxDrift)
+			return nil, fmt.Errorf("%w: time drift %ds exceeds max %ds", ErrStaleSignature, drift, *maxDrift)
 		}
 	}
 	// Reconstruct Sig_structure to verify
@@ -292,7 +293,7 @@ func Verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, maxDrift *ui
 
 	// Verify signature
 	if err := verifier.Verify(toBeSigned, xdsa.ParseSignature(sign1.Signature)); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrSignatureInvalid, err)
+		return nil, fmt.Errorf("%w: %v", ErrInvalidSignature, err)
 	}
 	return sign1.Payload, nil
 }
@@ -446,7 +447,7 @@ func Open(msgToOpen, msgToAuth []byte, recipient *xhpke.SecretKey, sender *xdsa.
 		return nil, err
 	}
 	// Verify protected header
-	if _, err := verifyEncProtectedHeader(encrypt0.Protected, algorithmXHPKE); err != nil {
+	if err := verifyEncProtectedHeader(encrypt0.Protected, algorithmXHPKE, recipient); err != nil {
 		return nil, err
 	}
 	// Extract encapsulated key from the unprotected headers
@@ -475,8 +476,9 @@ func Open(msgToOpen, msgToAuth []byte, recipient *xhpke.SecretKey, sender *xdsa.
 	return Verify(signed, msgToAuth, sender, maxDrift)
 }
 
-// verifySigProtectedHeader verifies the signature protected header contains exactly the expected algorithm.
-func verifySigProtectedHeader(data []byte, expectedAlg int64) (*sigProtectedHeader, error) {
+// verifySigProtectedHeader verifies the signature protected header contains exactly
+// the expected algorithm and that the key identifier matches the provided verifier.
+func verifySigProtectedHeader(data []byte, expectedAlg int64, verifier *xdsa.PublicKey) (*sigProtectedHeader, error) {
 	var header sigProtectedHeader
 	if err := cbor.Unmarshal(data, &header); err != nil {
 		return nil, err
@@ -484,17 +486,24 @@ func verifySigProtectedHeader(data []byte, expectedAlg int64) (*sigProtectedHead
 	if header.Algorithm != expectedAlg {
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrUnexpectedAlgorithm, header.Algorithm, expectedAlg)
 	}
+	if header.Kid != verifier.Fingerprint() {
+		return nil, fmt.Errorf("%w: got %x, want %x", ErrUnexpectedKey, header.Kid, verifier.Fingerprint())
+	}
 	return &header, nil
 }
 
-// verifyEncProtectedHeader verifies the encryption protected header contains exactly the expected algorithm.
-func verifyEncProtectedHeader(data []byte, expectedAlg int64) (*encProtectedHeader, error) {
+// verifyEncProtectedHeader verifies the encryption protected header contains exactly
+// the expected algorithm and that the key identifier matches the provided recipient.
+func verifyEncProtectedHeader(data []byte, expectedAlg int64, recipient *xhpke.SecretKey) error {
 	var header encProtectedHeader
 	if err := cbor.Unmarshal(data, &header); err != nil {
-		return nil, err
+		return err
 	}
 	if header.Algorithm != expectedAlg {
-		return nil, fmt.Errorf("%w: got %d, want %d", ErrUnexpectedAlgorithm, header.Algorithm, expectedAlg)
+		return fmt.Errorf("%w: got %d, want %d", ErrUnexpectedAlgorithm, header.Algorithm, expectedAlg)
 	}
-	return &header, nil
+	if header.Kid != recipient.Fingerprint() {
+		return fmt.Errorf("%w: got %x, want %x", ErrUnexpectedKey, header.Kid, recipient.Fingerprint())
+	}
+	return nil
 }
