@@ -167,6 +167,16 @@ func ParsePublicKey(b [PublicKeySize]byte) (*PublicKey, error) {
 	}, nil
 }
 
+// MustParsePublicKey converts a 32-byte array into a public key.
+// It panics if the parsing fails.
+func MustParsePublicKey(b [PublicKeySize]byte) *PublicKey {
+	key, err := ParsePublicKey(b)
+	if err != nil {
+		panic("eddsa: " + err.Error())
+	}
+	return key
+}
+
 // ParsePublicKeyDER parses a DER buffer into a public key.
 func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	spki, err := asn1ext.ParseSubjectPublicKeyInfo(der)

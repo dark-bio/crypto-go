@@ -89,6 +89,16 @@ func ParseSecretKey(b [SecretKeySize]byte) (*SecretKey, error) {
 	return &SecretKey{inner: key}, nil
 }
 
+// MustParseSecretKey parses a 520-byte array into a private key.
+// It panics if the parsing fails.
+func MustParseSecretKey(b [SecretKeySize]byte) *SecretKey {
+	key, err := ParseSecretKey(b)
+	if err != nil {
+		panic("rsa: " + err.Error())
+	}
+	return key
+}
+
 // ParseSecretKeyDER parses a PKCS#8 DER-encoded private key.
 func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	key, err := x509.ParsePKCS8PrivateKey(der)
@@ -255,6 +265,16 @@ func ParsePublicKey(b [PublicKeySize]byte) (*PublicKey, error) {
 			E: int(e.Int64()),
 		},
 	}, nil
+}
+
+// MustParsePublicKey parses a 264-byte array into a public key.
+// It panics if the parsing fails.
+func MustParsePublicKey(b [PublicKeySize]byte) *PublicKey {
+	key, err := ParsePublicKey(b)
+	if err != nil {
+		panic("rsa: " + err.Error())
+	}
+	return key
 }
 
 // ParsePublicKeyDER parses a PKIX DER-encoded public key.
