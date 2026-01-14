@@ -468,3 +468,13 @@ func (f *Fingerprint) UnmarshalText(text []byte) error {
 	copy(f[:], raw)
 	return nil
 }
+
+// Signer is an interface that allows creating xDSA signatures without a specific
+// backend. It's used for remote or hardware signers.
+type Signer interface {
+	// Sign signs the message and returns the signature.
+	Sign(message []byte) *Signature
+
+	// PublicKey returns the signer's public key.
+	PublicKey() *PublicKey
+}

@@ -19,17 +19,17 @@ import (
 
 // xdsaSigner implements x509.Signer through an XDSA secret key.
 type xdsaSigner struct {
-	key *xdsa.SecretKey
+	signer xdsa.Signer
 }
 
 // Sign signs the message and returns the signature.
 func (s *xdsaSigner) Sign(message []byte) [xdsa.SignatureSize]byte {
-	return *s.key.Sign(message)
+	return *s.signer.Sign(message)
 }
 
 // PublicKey returns the issuer's public key.
 func (s *xdsaSigner) PublicKey() [xdsa.PublicKeySize]byte {
-	return s.key.PublicKey().Marshal()
+	return s.signer.PublicKey().Marshal()
 }
 
 // MarshalCertDER generates a DER-encoded X.509 certificate for this public key,
@@ -37,7 +37,7 @@ func (s *xdsaSigner) PublicKey() [xdsa.PublicKeySize]byte {
 //
 // Note: HPKE certificates are always end-entity certificates. The IsCA
 // and PathLen fields in params are ignored and set to false/nil.
-func (k *PublicKey) MarshalCertDER(signer *xdsa.SecretKey, params *x509.Params) []byte {
+func (k *PublicKey) MarshalCertDER(signer xdsa.Signer, params *x509.Params) []byte {
 	// Force end-entity parameters
 	eeParams := &x509.Params{
 		SubjectName: params.SubjectName,

@@ -18,22 +18,22 @@ import (
 
 // xdsaSigner implements x509.Signer through an XDSA secret key.
 type xdsaSigner struct {
-	key *SecretKey
+	signer Signer
 }
 
 // Sign signs the message and returns the signature.
 func (s *xdsaSigner) Sign(message []byte) [SignatureSize]byte {
-	return *s.key.Sign(message)
+	return *s.signer.Sign(message)
 }
 
 // PublicKey returns the issuer's public key.
 func (s *xdsaSigner) PublicKey() [PublicKeySize]byte {
-	return s.key.PublicKey().Marshal()
+	return s.signer.PublicKey().Marshal()
 }
 
 // MarshalCertDER generates a DER-encoded X.509 certificate for this public key,
 // signed by an xDSA issuer.
-func (k *PublicKey) MarshalCertDER(signer *SecretKey, params *x509.Params) []byte {
+func (k *PublicKey) MarshalCertDER(signer Signer, params *x509.Params) []byte {
 	return x509ext.New[[PublicKeySize]byte](k, &xdsaSigner{signer}, params)
 }
 
