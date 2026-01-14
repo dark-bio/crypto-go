@@ -55,7 +55,7 @@ func (k *PublicKey) MarshalCertDER(signer xdsa.Signer, params *x509.Params) []by
 //
 // Note: HPKE certificates are always end-entity certificates. The IsCA
 // and PathLen fields in params are ignored and set to false/nil.
-func (k *PublicKey) MarshalCertPEM(signer *xdsa.SecretKey, params *x509.Params) string {
+func (k *PublicKey) MarshalCertPEM(signer xdsa.Signer, params *x509.Params) string {
 	return string(pem.Encode("CERTIFICATE", k.MarshalCertDER(signer, params)))
 }
 

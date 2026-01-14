@@ -39,7 +39,7 @@ func (k *PublicKey) MarshalCertDER(signer Signer, params *x509.Params) []byte {
 
 // MarshalCertPEM generates a PEM-encoded X.509 certificate for this public key,
 // signed by an xDSA issuer.
-func (k *PublicKey) MarshalCertPEM(signer *SecretKey, params *x509.Params) string {
+func (k *PublicKey) MarshalCertPEM(signer Signer, params *x509.Params) string {
 	return string(pem.Encode("CERTIFICATE", k.MarshalCertDER(signer, params)))
 }
 
