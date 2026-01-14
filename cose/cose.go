@@ -218,7 +218,7 @@ func SignAt(msgToEmbed, msgToAuth []byte, signer *xdsa.SecretKey, timestamp int6
 		Protected:   protected,
 		Unprotected: emptyHeader{},
 		Payload:     msgToEmbed,
-		Signature:   signature.Marshal(),
+		Signature:   *signature,
 	}
 	result, err := cbor.Marshal(&sign1)
 	if err != nil {
@@ -292,7 +292,8 @@ func Verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, maxDrift *ui
 	toBeSigned, _ := cbor.Marshal(&sig)
 
 	// Verify signature
-	if err := verifier.Verify(toBeSigned, xdsa.ParseSignature(sign1.Signature)); err != nil {
+	var xdsasig xdsa.Signature = sign1.Signature
+	if err := verifier.Verify(toBeSigned, &xdsasig); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidSignature, err)
 	}
 	return sign1.Payload, nil

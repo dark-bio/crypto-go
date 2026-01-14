@@ -23,7 +23,7 @@ type xdsaSigner struct {
 
 // Sign signs the message and returns the signature.
 func (s *xdsaSigner) Sign(message []byte) [SignatureSize]byte {
-	return s.key.Sign(message).Marshal()
+	return *s.key.Sign(message)
 }
 
 // PublicKey returns the issuer's public key.
@@ -56,10 +56,10 @@ func ParseCertDER(der []byte, signer *PublicKey) (*PublicKey, uint64, uint64, er
 	if len(cert.Signature) != SignatureSize {
 		return nil, 0, 0, errors.New("xdsa: invalid signature length")
 	}
-	var sig [SignatureSize]byte
+	var sig Signature
 	copy(sig[:], cert.Signature)
 
-	if err := signer.Verify(cert.RawTBSCertificate, ParseSignature(sig)); err != nil {
+	if err := signer.Verify(cert.RawTBSCertificate, &sig); err != nil {
 		return nil, 0, 0, err
 	}
 	// Extract the embedded public key (ML-DSA-65 1952 bytes || Ed25519 32 bytes)

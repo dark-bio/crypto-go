@@ -236,9 +236,9 @@ func TestIETFVectors(t *testing.T) {
 		t.Fatalf("failed to verify own signature: %v", err)
 	}
 	expectedSig, _ := hex.DecodeString(ietfVectors.Signature)
-	var expectedSigArray [SignatureSize]byte
+	var expectedSigArray Signature
 	copy(expectedSigArray[:], expectedSig)
-	if err := pubkey.Verify([]byte(ietfVectors.Message), ParseSignature(expectedSigArray)); err != nil {
+	if err := pubkey.Verify([]byte(ietfVectors.Message), &expectedSigArray); err != nil {
 		t.Fatalf("failed to verify IETF signature: %v", err)
 	}
 }

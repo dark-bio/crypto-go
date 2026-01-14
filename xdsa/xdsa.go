@@ -210,11 +210,10 @@ func (k *SecretKey) Sign(message []byte) *Signature {
 	edSig := k.edKey.Sign(mPrime)
 
 	// Concatenate: ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
-	var sig [SignatureSize]byte
+	var sig Signature
 	copy(sig[:3309], mlSig[:])
 	copy(sig[3309:], edSig[:])
-
-	return &Signature{inner: sig}
+	return &sig
 }
 
 // PublicKey is an ML-DSA-65 public key paired with an Ed25519 public key for
@@ -396,8 +395,8 @@ func (k *PublicKey) Verify(message []byte, sig *Signature) error {
 	// Split signatures
 	var mlSig mldsa.Signature
 	var edSig eddsa.Signature
-	copy(mlSig[:], sig.inner[:3309])
-	copy(edSig[:], sig.inner[3309:])
+	copy(mlSig[:], sig[:3309])
+	copy(edSig[:], sig[3309:])
 
 	// Verify both signatures
 	if err := k.mlKey.Verify(mPrime, []byte(signatureDomain), &mlSig); err != nil {
@@ -410,17 +409,15 @@ func (k *PublicKey) Verify(message []byte, sig *Signature) error {
 }
 
 // Signature contains a composite ML-DSA-65 + Ed25519 signature.
-type Signature struct {
-	inner [SignatureSize]byte
-}
+type Signature [SignatureSize]byte
 
 // ComposeSignature creates a signature from its constituent ML-DSA-65 and
 // Ed25519 signatures.
 func ComposeSignature(mlSig *mldsa.Signature, edSig *eddsa.Signature) *Signature {
-	var sig [SignatureSize]byte
+	var sig Signature
 	copy(sig[:mldsa.SignatureSize], mlSig[:])
 	copy(sig[mldsa.SignatureSize:], edSig[:])
-	return &Signature{inner: sig}
+	return &sig
 }
 
 // Split decomposes a signature into its constituent ML-DSA-65 and Ed25519
@@ -428,25 +425,14 @@ func ComposeSignature(mlSig *mldsa.Signature, edSig *eddsa.Signature) *Signature
 func (s *Signature) Split() (*mldsa.Signature, *eddsa.Signature) {
 	var mlSig mldsa.Signature
 	var edSig eddsa.Signature
-	copy(mlSig[:], s.inner[:mldsa.SignatureSize])
-	copy(edSig[:], s.inner[mldsa.SignatureSize:])
+	copy(mlSig[:], s[:3309])
+	copy(edSig[:], s[3309:])
 	return &mlSig, &edSig
-}
-
-// ParseSignature converts a 3373-byte array into a signature.
-func ParseSignature(b [SignatureSize]byte) *Signature {
-	return &Signature{inner: b}
-}
-
-// Marshal converts a signature into a 3373-byte array.
-func (s *Signature) Marshal() [SignatureSize]byte {
-	return s.inner
 }
 
 // MarshalText implements encoding.TextMarshaler.
 func (s *Signature) MarshalText() ([]byte, error) {
-	raw := s.Marshal()
-	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
+	return []byte(base64.StdEncoding.EncodeToString(s[:])), nil
 }
 
 // UnmarshalText implements encoding.TextUnmarshaler.
@@ -458,9 +444,7 @@ func (s *Signature) UnmarshalText(text []byte) error {
 	if len(raw) != SignatureSize {
 		return errors.New("xdsa: invalid signature length")
 	}
-	var b [SignatureSize]byte
-	copy(b[:], raw)
-	*s = *ParseSignature(b)
+	copy(s[:], raw)
 	return nil
 }
 
