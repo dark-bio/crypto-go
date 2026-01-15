@@ -45,7 +45,7 @@ type Subject[T XDSAOrXHPKEPublicKey] interface {
 // Signer is an interface for types that can sign X.509 certificates.
 type Signer interface {
 	// Sign signs the message and returns the signature.
-	Sign(message []byte) [3373]byte
+	Sign(message []byte) ([3373]byte, error)
 
 	// PublicKey returns the issuer's public key.
 	PublicKey() [1984]byte
@@ -83,7 +83,7 @@ type certificate struct {
 }
 
 // New creates an X.509 certificate for a subject, signed by the given signer.
-func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509.Params) []byte {
+func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509.Params) ([]byte, error) {
 	// Generate a random serial number
 	serialBytes := make([]byte, 16)
 	if _, err := rand.Read(serialBytes); err != nil {
@@ -156,8 +156,10 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 	if err != nil {
 		panic("x509: " + err.Error())
 	}
-	sig := signer.Sign(tbsDER)
-
+	sig, err := signer.Sign(tbsDER)
+	if err != nil {
+		return nil, err
+	}
 	// Create the final certificate
 	cert := certificate{
 		TBSCertificate:     asn1.RawValue{FullBytes: tbsDER},
@@ -171,7 +173,7 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 	if err != nil {
 		panic("x509: " + err.Error())
 	}
-	return certDER
+	return certDER, nil
 }
 
 // makeSKIExt creates a SubjectKeyIdentifier extension.

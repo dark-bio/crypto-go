@@ -482,7 +482,7 @@ func (f *Fingerprint) UnmarshalText(text []byte) error {
 // backend. It's used for remote or hardware signers.
 type Signer interface {
 	// Sign signs the message and returns the signature.
-	Sign(message []byte) *Signature
+	Sign(message []byte) (*Signature, error)
 
 	// PublicKey returns the signer's public key.
 	PublicKey() *PublicKey

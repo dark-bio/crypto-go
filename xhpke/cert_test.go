@@ -14,6 +14,13 @@ import (
 	"github.com/dark-bio/crypto-go/xdsa"
 )
 
+// Define some helpers to emulate remote signing with possible failures
+type xdsaFailableSigner struct{ *xdsa.SecretKey }
+
+func (s xdsaFailableSigner) Sign(msg []byte) (*xdsa.Signature, error) {
+	return s.SecretKey.Sign(msg), nil
+}
+
 // TestCertParse tests that certificates can be created and then parsed and verified.
 func TestCertParse(t *testing.T) {
 	// Create the keys for Alice (HPKE) and Bobby (xDSA signer)
@@ -27,7 +34,7 @@ func TestCertParse(t *testing.T) {
 	until := start + 3600
 
 	// Test PEM roundtrip
-	pemCert := alicePublic.MarshalCertPEM(bobbySecret, &x509.Params{
+	pemCert, err := alicePublic.MarshalCertPEM(xdsaFailableSigner{bobbySecret}, &x509.Params{
 		SubjectName: "Alice",
 		IssuerName:  "Bobby",
 		NotBefore:   start,
@@ -35,7 +42,9 @@ func TestCertParse(t *testing.T) {
 		IsCA:        false,
 		PathLen:     nil,
 	})
-
+	if err != nil {
+		t.Fatalf("signing certificate failed: %v", err)
+	}
 	parsedKey, parsedStart, parsedUntil, err := ParseCertPEM(pemCert, bobbyPublic)
 	if err != nil {
 		t.Fatalf("ParseCertPEM failed: %v", err)
@@ -51,7 +60,7 @@ func TestCertParse(t *testing.T) {
 	}
 
 	// Test DER roundtrip
-	derCert := alicePublic.MarshalCertDER(bobbySecret, &x509.Params{
+	derCert, err := alicePublic.MarshalCertDER(xdsaFailableSigner{bobbySecret}, &x509.Params{
 		SubjectName: "Alice",
 		IssuerName:  "Bobby",
 		NotBefore:   start,
@@ -59,7 +68,9 @@ func TestCertParse(t *testing.T) {
 		IsCA:        false,
 		PathLen:     nil,
 	})
-
+	if err != nil {
+		t.Fatalf("signing certificate failed: %v", err)
+	}
 	parsedKey, parsedStart, parsedUntil, err = ParseCertDER(derCert, bobbyPublic)
 	if err != nil {
 		t.Fatalf("ParseCertDER failed: %v", err)
@@ -90,7 +101,7 @@ func TestCertInvalidSigner(t *testing.T) {
 	until := start + 3600
 
 	// Sign a new certificate and verify with the wrong signer
-	pemCert := alicePublic.MarshalCertPEM(bobbySecret, &x509.Params{
+	pemCert, err := alicePublic.MarshalCertPEM(xdsaFailableSigner{bobbySecret}, &x509.Params{
 		SubjectName: "Alice",
 		IssuerName:  "Bobby",
 		NotBefore:   start,
@@ -98,9 +109,10 @@ func TestCertInvalidSigner(t *testing.T) {
 		IsCA:        false,
 		PathLen:     nil,
 	})
-
-	_, _, _, err := ParseCertPEM(pemCert, wrongSecret.PublicKey())
-	if err == nil {
+	if err != nil {
+		t.Fatalf("signing certificate failed: %v", err)
+	}
+	if _, _, _, err = ParseCertPEM(pemCert, wrongSecret.PublicKey()); err == nil {
 		t.Error("expected verification to fail with wrong signer")
 	}
 }

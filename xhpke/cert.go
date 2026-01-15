@@ -23,8 +23,14 @@ type xdsaSigner struct {
 }
 
 // Sign signs the message and returns the signature.
-func (s *xdsaSigner) Sign(message []byte) [xdsa.SignatureSize]byte {
-	return *s.signer.Sign(message)
+func (s *xdsaSigner) Sign(message []byte) ([xdsa.SignatureSize]byte, error) {
+	sig, err := s.signer.Sign(message)
+	if err != nil {
+		return [xdsa.SignatureSize]byte{}, err
+	}
+	var blob [xdsa.SignatureSize]byte
+	copy(blob[:], (*sig)[:])
+	return blob, nil
 }
 
 // PublicKey returns the issuer's public key.
@@ -37,7 +43,7 @@ func (s *xdsaSigner) PublicKey() [xdsa.PublicKeySize]byte {
 //
 // Note: HPKE certificates are always end-entity certificates. The IsCA
 // and PathLen fields in params are ignored and set to false/nil.
-func (k *PublicKey) MarshalCertDER(signer xdsa.Signer, params *x509.Params) []byte {
+func (k *PublicKey) MarshalCertDER(signer xdsa.Signer, params *x509.Params) ([]byte, error) {
 	// Force end-entity parameters
 	eeParams := &x509.Params{
 		SubjectName: params.SubjectName,
@@ -55,8 +61,12 @@ func (k *PublicKey) MarshalCertDER(signer xdsa.Signer, params *x509.Params) []by
 //
 // Note: HPKE certificates are always end-entity certificates. The IsCA
 // and PathLen fields in params are ignored and set to false/nil.
-func (k *PublicKey) MarshalCertPEM(signer xdsa.Signer, params *x509.Params) string {
-	return string(pem.Encode("CERTIFICATE", k.MarshalCertDER(signer, params)))
+func (k *PublicKey) MarshalCertPEM(signer xdsa.Signer, params *x509.Params) (string, error) {
+	der, err := k.MarshalCertDER(signer, params)
+	if err != nil {
+		return "", err
+	}
+	return string(pem.Encode("CERTIFICATE", der)), nil
 }
 
 // ParseCertDER parses a public key from a DER-encoded X.509 certificate,

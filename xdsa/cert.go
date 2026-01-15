@@ -22,8 +22,14 @@ type xdsaSigner struct {
 }
 
 // Sign signs the message and returns the signature.
-func (s *xdsaSigner) Sign(message []byte) [SignatureSize]byte {
-	return *s.signer.Sign(message)
+func (s *xdsaSigner) Sign(message []byte) ([SignatureSize]byte, error) {
+	sig, err := s.signer.Sign(message)
+	if err != nil {
+		return [SignatureSize]byte{}, err
+	}
+	var blob [SignatureSize]byte
+	copy(blob[:], (*sig)[:])
+	return blob, nil
 }
 
 // PublicKey returns the issuer's public key.
@@ -33,14 +39,18 @@ func (s *xdsaSigner) PublicKey() [PublicKeySize]byte {
 
 // MarshalCertDER generates a DER-encoded X.509 certificate for this public key,
 // signed by an xDSA issuer.
-func (k *PublicKey) MarshalCertDER(signer Signer, params *x509.Params) []byte {
+func (k *PublicKey) MarshalCertDER(signer Signer, params *x509.Params) ([]byte, error) {
 	return x509ext.New[[PublicKeySize]byte](k, &xdsaSigner{signer}, params)
 }
 
 // MarshalCertPEM generates a PEM-encoded X.509 certificate for this public key,
 // signed by an xDSA issuer.
-func (k *PublicKey) MarshalCertPEM(signer Signer, params *x509.Params) string {
-	return string(pem.Encode("CERTIFICATE", k.MarshalCertDER(signer, params)))
+func (k *PublicKey) MarshalCertPEM(signer Signer, params *x509.Params) (string, error) {
+	der, err := k.MarshalCertDER(signer, params)
+	if err != nil {
+		return "", err
+	}
+	return string(pem.Encode("CERTIFICATE", der)), nil
 }
 
 // ParseCertDER parses a public key from a DER-encoded X.509 certificate,
