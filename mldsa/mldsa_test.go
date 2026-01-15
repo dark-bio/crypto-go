@@ -427,7 +427,7 @@ func TestSignVerify(t *testing.T) {
 		{message: []byte("message to authenticate"), ctx: []byte("application context")},
 	}
 	for _, tt := range tests {
-		signature := secret.Sign(tt.message, tt.ctx)
+		signature, _ := secret.Sign(tt.message, tt.ctx)
 		if err := public.Verify(tt.message, tt.ctx, signature); err != nil {
 			t.Fatalf("failed to verify message: %v", err)
 		}

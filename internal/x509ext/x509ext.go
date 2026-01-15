@@ -45,10 +45,10 @@ type Subject[T XDSAOrXHPKEPublicKey] interface {
 // Signer is an interface for types that can sign X.509 certificates.
 type Signer interface {
 	// Sign signs the message and returns the signature.
-	Sign(message []byte) ([3373]byte, error)
+	Sign(message []byte) (*[3373]byte, error)
 
 	// PublicKey returns the issuer's public key.
-	PublicKey() [1984]byte
+	PublicKey() *[1984]byte
 }
 
 // tbsCertificate is the ASN.1 structure for the TBS (to-be-signed) certificate.
@@ -98,11 +98,11 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 	}
 
 	// Build subject and issuer names using pkix.Name
-	issuerRDN, err := asn1.Marshal(pkix.Name{CommonName: params.IssuerName}.ToRDNSequence())
+	issuerRDN, err := asn1.Marshal(params.IssuerName.ToRDNSequence())
 	if err != nil {
 		panic("x509: " + err.Error())
 	}
-	subjectRDN, err := asn1.Marshal(pkix.Name{CommonName: params.SubjectName}.ToRDNSequence())
+	subjectRDN, err := asn1.Marshal(params.SubjectName.ToRDNSequence())
 	if err != nil {
 		panic("x509: " + err.Error())
 	}
@@ -144,8 +144,8 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 		SignatureAlgorithm: sigAlg,
 		Issuer:             issuerName,
 		Validity: validity{
-			NotBefore: time.Unix(int64(params.NotBefore), 0).UTC(),
-			NotAfter:  time.Unix(int64(params.NotAfter), 0).UTC(),
+			NotBefore: params.NotBefore.UTC(),
+			NotAfter:  params.NotAfter.UTC(),
 		},
 		Subject:       subjectName,
 		PublicKeyInfo: spki,

@@ -148,10 +148,11 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 	return k.PublicKey().Fingerprint()
 }
 
-// Sign creates a digital signature of the message.
-func (k *SecretKey) Sign(message []byte) *Signature {
+// Sign creates a digital signature of the message. This call will never return
+// an error, the type is there for composability.
+func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 	sig := ed25519.Sign(k.key, message)
-	return (*Signature)(sig)
+	return (*Signature)(sig), nil
 }
 
 // PublicKey contains an Ed25519 public key usable for verification.

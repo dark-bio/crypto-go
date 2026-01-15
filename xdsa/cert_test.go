@@ -7,18 +7,12 @@
 package xdsa
 
 import (
+	"crypto/x509/pkix"
 	"testing"
 	"time"
 
 	"github.com/dark-bio/crypto-go/x509"
 )
-
-// Define some helpers to emulate remote signing with possible failures
-type xdsaFailableSigner struct{ *SecretKey }
-
-func (s xdsaFailableSigner) Sign(msg []byte) (*Signature, error) {
-	return s.SecretKey.Sign(msg), nil
-}
 
 // TestCertParse tests that certificates can be created and then parsed and verified.
 func TestCertParse(t *testing.T) {
@@ -29,13 +23,13 @@ func TestCertParse(t *testing.T) {
 	bobbyPublic := bobbySecret.PublicKey()
 
 	// Create a certificate for Alice, signed by Bobby
-	start := uint64(time.Now().Unix())
-	until := start + 3600
+	start := time.Now().Truncate(time.Second)
+	until := start.Add(time.Hour)
 
 	// Test PEM roundtrip (end-entity cert)
-	pemCert, err := alicePublic.MarshalCertPEM(xdsaFailableSigner{bobbySecret}, &x509.Params{
-		SubjectName: "Alice",
-		IssuerName:  "Bobby",
+	pemCert, err := alicePublic.MarshalCertPEM(bobbySecret, &x509.Params{
+		SubjectName: pkix.Name{CommonName: "Alice"},
+		IssuerName:  pkix.Name{CommonName: "Bobby"},
 		NotBefore:   start,
 		NotAfter:    until,
 		IsCA:        false,
@@ -44,25 +38,24 @@ func TestCertParse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("signing certificate failed: %v", err)
 	}
-	parsedKey, parsedStart, parsedUntil, err := ParseCertPEM(pemCert, bobbyPublic)
+	parsedKey, parsedCert, err := ParseCertPEM(pemCert, bobbyPublic)
 	if err != nil {
 		t.Fatalf("ParseCertPEM failed: %v", err)
 	}
 	if parsedKey.Marshal() != alicePublic.Marshal() {
 		t.Error("parsed public key does not match original")
 	}
-	if parsedStart != start {
-		t.Errorf("parsed notBefore %d does not match %d", parsedStart, start)
+	if !parsedCert.NotBefore.Equal(start) {
+		t.Errorf("parsed notBefore %v does not match %v", parsedCert.NotBefore, start)
 	}
-	if parsedUntil != until {
-		t.Errorf("parsed notAfter %d does not match %d", parsedUntil, until)
+	if !parsedCert.NotAfter.Equal(until) {
+		t.Errorf("parsed notAfter %v does not match %v", parsedCert.NotAfter, until)
 	}
-
 	// Test DER roundtrip (CA cert with path_len=0)
 	pathLen := uint8(0)
-	derCert, err := alicePublic.MarshalCertDER(xdsaFailableSigner{bobbySecret}, &x509.Params{
-		SubjectName: "Alice",
-		IssuerName:  "Bobby",
+	derCert, err := alicePublic.MarshalCertDER(bobbySecret, &x509.Params{
+		SubjectName: pkix.Name{CommonName: "Alice"},
+		IssuerName:  pkix.Name{CommonName: "Bobby"},
 		NotBefore:   start,
 		NotAfter:    until,
 		IsCA:        true,
@@ -71,18 +64,18 @@ func TestCertParse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("signing certificate failed: %v", err)
 	}
-	parsedKey, parsedStart, parsedUntil, err = ParseCertDER(derCert, bobbyPublic)
+	parsedKey, parsedCert, err = ParseCertDER(derCert, bobbyPublic)
 	if err != nil {
 		t.Fatalf("ParseCertDER failed: %v", err)
 	}
 	if parsedKey.Marshal() != alicePublic.Marshal() {
 		t.Error("parsed public key does not match original")
 	}
-	if parsedStart != start {
-		t.Errorf("parsed notBefore %d does not match %d", parsedStart, start)
+	if !parsedCert.NotBefore.Equal(start) {
+		t.Errorf("parsed notBefore %v does not match %v", parsedCert.NotBefore, start)
 	}
-	if parsedUntil != until {
-		t.Errorf("parsed notAfter %d does not match %d", parsedUntil, until)
+	if !parsedCert.NotAfter.Equal(until) {
+		t.Errorf("parsed notAfter %v does not match %v", parsedCert.NotAfter, until)
 	}
 }
 
@@ -97,13 +90,13 @@ func TestCertInvalidSigner(t *testing.T) {
 	alicePublic := aliceSecret.PublicKey()
 
 	// Create a certificate for Alice, signed by Bobby
-	start := uint64(time.Now().Unix())
-	until := start + 3600
+	start := time.Now().Truncate(time.Second)
+	until := start.Add(time.Hour)
 
 	// Sign a new certificate and verify with the wrong signer
-	pemCert, err := alicePublic.MarshalCertPEM(xdsaFailableSigner{bobbySecret}, &x509.Params{
-		SubjectName: "Alice",
-		IssuerName:  "Bobby",
+	pemCert, err := alicePublic.MarshalCertPEM(bobbySecret, &x509.Params{
+		SubjectName: pkix.Name{CommonName: "Alice"},
+		IssuerName:  pkix.Name{CommonName: "Bobby"},
 		NotBefore:   start,
 		NotAfter:    until,
 		IsCA:        false,
@@ -112,7 +105,7 @@ func TestCertInvalidSigner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("signing certificate failed: %v", err)
 	}
-	if _, _, _, err = ParseCertPEM(pemCert, wrongSecret.PublicKey()); err == nil {
+	if _, _, err = ParseCertPEM(pemCert, wrongSecret.PublicKey()); err == nil {
 		t.Error("expected verification to fail with wrong signer")
 	}
 }

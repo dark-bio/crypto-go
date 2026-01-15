@@ -220,14 +220,15 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 	return k.PublicKey().Fingerprint()
 }
 
-// Sign creates a digital signature of the message using PKCS#1 v1.5.
-func (k *SecretKey) Sign(message []byte) *Signature {
+// Sign creates a digital signature of the message using PKCS#1 v1.5. This call
+// will never return an error, the type is there for composability.
+func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 	hash := sha256.Sum256(message)
 	sig, err := rsa.SignPKCS1v15(rand.Reader, k.inner, crypto.SHA256, hash[:])
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	return (*Signature)(sig)
+	return (*Signature)(sig), nil
 }
 
 // PublicKey contains a 2048-bit RSA public key usable for verification, with

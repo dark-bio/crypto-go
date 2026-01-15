@@ -231,7 +231,7 @@ func TestIETFVectors(t *testing.T) {
 	if !bytes.Equal(pubkeyBytes[:], expectedPubkey) {
 		t.Fatal("public key mismatch")
 	}
-	sig := seckey.Sign([]byte(ietfVectors.Message))
+	sig, _ := seckey.Sign([]byte(ietfVectors.Message))
 	if err := pubkey.Verify([]byte(ietfVectors.Message), sig); err != nil {
 		t.Fatalf("failed to verify own signature: %v", err)
 	}
@@ -403,8 +403,8 @@ func TestSignatureComposeSplit(t *testing.T) {
 	edSec := eddsa.GenerateKey()
 
 	message := []byte("test message")
-	mlSig := mlSec.Sign(message, nil)
-	edSig := edSec.Sign(message)
+	mlSig, _ := mlSec.Sign(message, nil)
+	edSig, _ := edSec.Sign(message)
 
 	mlBytes := *mlSig
 	edBytes := *edSig
@@ -428,24 +428,11 @@ func TestComposeSignVerify(t *testing.T) {
 	compositePub := compositeSec.PublicKey()
 
 	message := []byte("message to sign with composite key")
-	signature := compositeSec.Sign(message)
+	signature, _ := compositeSec.Sign(message)
 
 	if err := compositePub.Verify(message, signature); err != nil {
 		t.Fatalf("failed to verify composite signature: %v", err)
 	}
-}
-
-// Define some helpers to emulate remote signing with possible failures
-type mldsaSigner struct{ *mldsa.SecretKey }
-
-func (s mldsaSigner) Sign(msg, ctx []byte) (*mldsa.Signature, error) {
-	return s.SecretKey.Sign(msg, ctx), nil
-}
-
-type eddsaSigner struct{ *eddsa.SecretKey }
-
-func (s eddsaSigner) Sign(msg []byte) (*eddsa.Signature, error) {
-	return s.SecretKey.Sign(msg), nil
 }
 
 // Test that split signing with remote signers can be reassembled and verified
@@ -455,7 +442,7 @@ func TestSplitSignComposeVerify(t *testing.T) {
 	edSec := eddsa.GenerateKey()
 
 	message := []byte("message to sign separately")
-	signature, err := SplitSign(mldsaSigner{mlSec}, eddsaSigner{edSec}, message)
+	signature, err := SplitSign(mlSec, edSec, message)
 	if err != nil {
 		t.Fatalf("failed to split sign: %v", err)
 	}

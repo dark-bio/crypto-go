@@ -205,10 +205,11 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 }
 
 // Sign creates a digital signature of the message with an optional context string.
-func (k *SecretKey) Sign(message []byte, ctx []byte) *Signature {
+// This call will never return an error, the type is there for composability.
+func (k *SecretKey) Sign(message []byte, ctx []byte) (*Signature, error) {
 	var sig Signature
 	mldsa65.SignTo(k.key, message, ctx, false, sig[:])
-	return &sig
+	return &sig, nil
 }
 
 // PublicKey contains an ML-DSA-65 public key for verifying digital signatures.

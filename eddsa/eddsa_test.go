@@ -20,7 +20,7 @@ func TestSignVerify(t *testing.T) {
 	public := secret.PublicKey()
 
 	message := []byte("message to authenticate")
-	signature := secret.Sign(message)
+	signature, _ := secret.Sign(message)
 
 	if err := public.Verify(message, signature); err != nil {
 		t.Fatalf("failed to verify message: %v", err)

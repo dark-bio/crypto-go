@@ -211,7 +211,7 @@ func SignAt(msgToEmbed, msgToAuth []byte, signer *xdsa.SecretKey, timestamp int6
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	signature := signer.Sign(toBeSigned)
+	signature, _ := signer.Sign(toBeSigned)
 
 	// Build and encode COSE_Sign1
 	sign1 := coseSign1{
