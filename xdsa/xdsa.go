@@ -195,7 +195,18 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 
 // Sign creates a digital signature of the message.
 func (k *SecretKey) Sign(message []byte) *Signature {
-	return SplitSign(k.mlKey, k.edKey, message)
+	// Compute the M' that will be signed by the two keys
+	mPrime := cmldsaMessagePrime(message)
+
+	// Sign M' with both algorithms
+	mlSig := k.mlKey.Sign(mPrime, []byte(signatureDomain))
+	edSig := k.edKey.Sign(mPrime)
+
+	// Concatenate: ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
+	var sig Signature
+	copy(sig[:3309], mlSig[:])
+	copy(sig[3309:], edSig[:])
+	return &sig
 }
 
 // SplitSign implements the xDSA signature algorithm, operating on split signers
@@ -204,19 +215,24 @@ func (k *SecretKey) Sign(message []byte) *Signature {
 // ML-DSA will probably not be shipped maybe ever. This method allows the user to
 // create the two signatures and combine them, *without* having to leak out the
 // internal signature scheme.
-func SplitSign(mlKey mldsa.Signer, edKey eddsa.Signer, message []byte) *Signature {
+func SplitSign(mlKey mldsa.Signer, edKey eddsa.Signer, message []byte) (*Signature, error) {
 	// Compute the M' that will be signed by the two keys
 	mPrime := cmldsaMessagePrime(message)
 
 	// Sign M' with both algorithms
-	mlSig := mlKey.Sign(mPrime, []byte(signatureDomain))
-	edSig := edKey.Sign(mPrime)
-
+	mlSig, err := mlKey.Sign(mPrime, []byte(signatureDomain))
+	if err != nil {
+		return nil, err
+	}
+	edSig, err := edKey.Sign(mPrime)
+	if err != nil {
+		return nil, err
+	}
 	// Concatenate: ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
 	var sig Signature
 	copy(sig[:3309], mlSig[:])
 	copy(sig[3309:], edSig[:])
-	return &sig
+	return &sig, nil
 }
 
 // PublicKey is an ML-DSA-65 public key paired with an Ed25519 public key for

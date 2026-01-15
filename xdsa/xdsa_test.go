@@ -435,12 +435,30 @@ func TestComposeSignVerify(t *testing.T) {
 	}
 }
 
+// Define some helpers to emulate remote signing with possible failures
+type mldsaSigner struct{ *mldsa.SecretKey }
+
+func (s mldsaSigner) Sign(msg, ctx []byte) (*mldsa.Signature, error) {
+	return s.SecretKey.Sign(msg, ctx), nil
+}
+
+type eddsaSigner struct{ *eddsa.SecretKey }
+
+func (s eddsaSigner) Sign(msg []byte) (*eddsa.Signature, error) {
+	return s.SecretKey.Sign(msg), nil
+}
+
+// Test that split signing with remote signers can be reassembled and verified
+// with a local public key.
 func TestSplitSignComposeVerify(t *testing.T) {
 	mlSec := mldsa.GenerateKey()
 	edSec := eddsa.GenerateKey()
 
 	message := []byte("message to sign separately")
-	signature := SplitSign(mlSec, edSec, message)
+	signature, err := SplitSign(mldsaSigner{mlSec}, eddsaSigner{edSec}, message)
+	if err != nil {
+		t.Fatalf("failed to split sign: %v", err)
+	}
 
 	// Compose the signatures and public keys
 	compositePub := ComposePublicKey(mlSec.PublicKey(), edSec.PublicKey())

@@ -389,5 +389,5 @@ func (f *Fingerprint) UnmarshalText(text []byte) error {
 // into other constructs without tying it to an in-memory private key.
 type Signer interface {
 	// Sign signs the message and returns the signature.
-	Sign(message []byte, ctx []byte) *Signature
+	Sign(message []byte, ctx []byte) (*Signature, error)
 }
