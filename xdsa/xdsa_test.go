@@ -435,23 +435,18 @@ func TestComposeSignVerify(t *testing.T) {
 	}
 }
 
-func TestSeparateSignComposeVerify(t *testing.T) {
+func TestSplitSignComposeVerify(t *testing.T) {
 	mlSec := mldsa.GenerateKey()
 	edSec := eddsa.GenerateKey()
 
 	message := []byte("message to sign separately")
-	mPrime := SplitSigningMessage(message)
-
-	// Sign M' separately with each key
-	mlSig := mlSec.Sign(mPrime, []byte(SignatureDomain))
-	edSig := edSec.Sign(mPrime)
+	signature := SplitSign(mlSec, edSec, message)
 
 	// Compose the signatures and public keys
-	compositeSig := ComposeSignature(mlSig, edSig)
 	compositePub := ComposePublicKey(mlSec.PublicKey(), edSec.PublicKey())
 
 	// Verify the composed signature with the composed public key
-	if err := compositePub.Verify(message, compositeSig); err != nil {
+	if err := compositePub.Verify(message, signature); err != nil {
 		t.Fatalf("failed to verify composed signature: %v", err)
 	}
 }

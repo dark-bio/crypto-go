@@ -384,3 +384,10 @@ func (f *Fingerprint) UnmarshalText(text []byte) error {
 	copy(f[:], raw)
 	return nil
 }
+
+// Signer is an interface to allow integrating ML-DSA signatures more tightly
+// into other constructs without tying it to an in-memory private key.
+type Signer interface {
+	// Sign signs the message and returns the signature.
+	Sign(message []byte, ctx []byte) *Signature
+}

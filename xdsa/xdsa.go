@@ -29,8 +29,8 @@ const (
 	// per the IETF composite signature spec.
 	signaturePrefix = "CompositeAlgorithmSignatures2025"
 
-	// SignatureDomain is the signature label for ML-DSA-65-Ed25519-SHA512.
-	SignatureDomain = "COMPSIG-MLDSA65-Ed25519-SHA512"
+	// signatureDomain is the signature label for ML-DSA-65-Ed25519-SHA512.
+	signatureDomain = "COMPSIG-MLDSA65-Ed25519-SHA512"
 
 	// SecretKeySize is the size of the secret key in bytes.
 	// Format: ML-DSA seed (32 bytes) || Ed25519 seed (32 bytes)
@@ -50,25 +50,6 @@ const (
 
 // OID is the ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
 var OID = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 6, 48}
-
-// SplitSigningMessage derives the composite message M' from a raw message
-// according to the IETF composite signature spec:
-//
-//	M' = Prefix || Label || len(ctx) || ctx || PH(M)
-//	  where ctx is empty and PH is SHA512.
-//
-// Use this when signing separately with individual ML-DSA and Ed25519 keys
-// before composing the signatures.
-func SplitSigningMessage(message []byte) []byte {
-	prehash := sha512.Sum512(message)
-
-	mPrime := make([]byte, 0, len(signaturePrefix)+len(SignatureDomain)+1+64)
-	mPrime = append(mPrime, signaturePrefix...)
-	mPrime = append(mPrime, SignatureDomain...)
-	mPrime = append(mPrime, 0) // len(ctx) = 0
-	mPrime = append(mPrime, prehash[:]...)
-	return mPrime
-}
 
 // SecretKey contains a composite ML-DSA-65 + Ed25519 private key for creating
 // quantum-resistant digital signatures.
@@ -214,11 +195,22 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 
 // Sign creates a digital signature of the message.
 func (k *SecretKey) Sign(message []byte) *Signature {
-	mPrime := SplitSigningMessage(message)
+	return SplitSign(k.mlKey, k.edKey, message)
+}
+
+// SplitSign implements the xDSA signature algorithm, operating on split signers
+// instead of a composite secret key. This method is needed as currently there is
+// no hardware HSM that supports ML-DSA; but even when that arrives, composite
+// ML-DSA will probably not be shipped maybe ever. This method allows the user to
+// create the two signatures and combine them, *without* having to leak out the
+// internal signature scheme.
+func SplitSign(mlKey mldsa.Signer, edKey eddsa.Signer, message []byte) *Signature {
+	// Compute the M' that will be signed by the two keys
+	mPrime := cmldsaMessagePrime(message)
 
 	// Sign M' with both algorithms
-	mlSig := k.mlKey.Sign(mPrime, []byte(SignatureDomain))
-	edSig := k.edKey.Sign(mPrime)
+	mlSig := mlKey.Sign(mPrime, []byte(signatureDomain))
+	edSig := edKey.Sign(mPrime)
 
 	// Concatenate: ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
 	var sig Signature
@@ -393,19 +385,17 @@ func (k *PublicKey) Fingerprint() Fingerprint {
 
 // Verify verifies a digital signature.
 func (k *PublicKey) Verify(message []byte, sig *Signature) error {
-	mPrime := SplitSigningMessage(message)
+	// Compute the M' that needed to be signed by the two keys
+	mPrime := cmldsaMessagePrime(message)
 
 	// Split signatures
-	var mlSig mldsa.Signature
-	var edSig eddsa.Signature
-	copy(mlSig[:], sig[:3309])
-	copy(edSig[:], sig[3309:])
+	mlSig, edSig := sig.Split()
 
 	// Verify both signatures
-	if err := k.mlKey.Verify(mPrime, []byte(SignatureDomain), &mlSig); err != nil {
+	if err := k.mlKey.Verify(mPrime, []byte(signatureDomain), mlSig); err != nil {
 		return errors.New("xdsa: ML-DSA signature verification failed")
 	}
-	if err := k.edKey.Verify(mPrime, &edSig); err != nil {
+	if err := k.edKey.Verify(mPrime, edSig); err != nil {
 		return errors.New("xdsa: Ed25519 signature verification failed")
 	}
 	return nil
@@ -480,4 +470,23 @@ type Signer interface {
 
 	// PublicKey returns the signer's public key.
 	PublicKey() *PublicKey
+}
+
+// cmldsaMessagePrime derives the composite message M' from a raw message
+// according to the IETF composite signature spec:
+//
+//	M' = Prefix || Label || len(ctx) || ctx || PH(M)
+//	  where ctx is empty and PH is SHA512.
+//
+// Use this when signing separately with individual ML-DSA and Ed25519 keys
+// before composing the signatures.
+func cmldsaMessagePrime(message []byte) []byte {
+	prehash := sha512.Sum512(message)
+
+	mPrime := make([]byte, 0, len(signaturePrefix)+len(signatureDomain)+1+64)
+	mPrime = append(mPrime, signaturePrefix...)
+	mPrime = append(mPrime, signatureDomain...)
+	mPrime = append(mPrime, 0) // len(ctx) = 0
+	mPrime = append(mPrime, prehash[:]...)
+	return mPrime
 }
