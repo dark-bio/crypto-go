@@ -23,10 +23,6 @@ import (
 )
 
 const (
-	// InfoPrefix is the prefix for the info string used in HPKE operations,
-	// binding the keys to the Dark Bio application context.
-	InfoPrefix = "dark-bio-v1:"
-
 	// SecretKeySize is the size of the secret key seed in bytes.
 	SecretKeySize = 32
 
@@ -181,15 +177,13 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 // Note: X-Wing uses Base mode (no sender authentication). The sender's identity
 // cannot be verified from the ciphertext alone.
 func (k *SecretKey) Open(sessionKey *[EncapKeySize]byte, msgToOpen, msgToAuth, domain []byte) ([]byte, error) {
-	info := append([]byte(InfoPrefix), domain...)
-
 	// Create a receiver session using Base mode (X-Wing doesn't support Auth mode)
 	recipient, err := hpke.NewRecipient(
 		sessionKey[:],
 		k.inner,
 		hpke.HKDFSHA256(),
 		hpke.ChaCha20Poly1305(),
-		info,
+		domain,
 	)
 	if err != nil {
 		return nil, err
@@ -373,14 +367,12 @@ func (f *Fingerprint) UnmarshalText(text []byte) error {
 // Note: X-Wing uses Base mode (no sender authentication). The recipient cannot
 // verify the sender's identity from the ciphertext alone.
 func (k *PublicKey) Seal(msgToSeal, msgToAuth, domain []byte) ([EncapKeySize]byte, []byte, error) {
-	info := append([]byte(InfoPrefix), domain...)
-
 	// Create a sender session using Base mode (X-Wing doesn't support Auth mode)
 	encapKey, sender, err := hpke.NewSender(
 		k.inner,
 		hpke.HKDFSHA256(),
 		hpke.ChaCha20Poly1305(),
-		info,
+		domain,
 	)
 	if err != nil {
 		return [EncapKeySize]byte{}, nil, err

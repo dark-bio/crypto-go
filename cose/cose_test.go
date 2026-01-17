@@ -24,6 +24,8 @@ func TestSignVerify(t *testing.T) {
 		msgToSign         []byte
 		msgToAuth         []byte
 		verifierMsgToAuth []byte
+		domain            []byte
+		verifierDomain    []byte
 		timestamp         *int64
 		maxDrift          *uint64
 		wrongKey          bool
@@ -34,6 +36,8 @@ func TestSignVerify(t *testing.T) {
 			msgToSign:         []byte("foo"),
 			msgToAuth:         []byte("bar"),
 			verifierMsgToAuth: []byte("bar"),
+			domain:            []byte("baz"),
+			verifierDomain:    []byte("baz"),
 			timestamp:         nil,
 			maxDrift:          nil,
 			wrongKey:          false,
@@ -44,6 +48,8 @@ func TestSignVerify(t *testing.T) {
 			msgToSign:         []byte("foobar"),
 			msgToAuth:         []byte(""),
 			verifierMsgToAuth: []byte(""),
+			domain:            []byte("baz"),
+			verifierDomain:    []byte("baz"),
 			timestamp:         nil,
 			maxDrift:          nil,
 			wrongKey:          false,
@@ -54,6 +60,8 @@ func TestSignVerify(t *testing.T) {
 			msgToSign:         []byte("foo"),
 			msgToAuth:         []byte("bar"),
 			verifierMsgToAuth: []byte("bar"),
+			domain:            []byte("baz"),
+			verifierDomain:    []byte("baz"),
 			timestamp:         ptr(now),
 			maxDrift:          nil,
 			wrongKey:          false,
@@ -64,16 +72,32 @@ func TestSignVerify(t *testing.T) {
 			msgToSign:         []byte("foo"),
 			msgToAuth:         []byte("bar"),
 			verifierMsgToAuth: []byte("bar"),
+			domain:            []byte("baz"),
+			verifierDomain:    []byte("baz"),
 			timestamp:         ptr(now - 30),
 			maxDrift:          uptr(60),
 			wrongKey:          false,
 			wantOK:            true,
+		},
+		// Wrong domain
+		{
+			msgToSign:         []byte("foo"),
+			msgToAuth:         []byte("bar"),
+			verifierMsgToAuth: []byte("bar"),
+			domain:            []byte("baz"),
+			verifierDomain:    []byte("baz2"),
+			timestamp:         nil,
+			maxDrift:          nil,
+			wrongKey:          false,
+			wantOK:            false,
 		},
 		// Wrong aad
 		{
 			msgToSign:         []byte("foo!"),
 			msgToAuth:         []byte("bar"),
 			verifierMsgToAuth: []byte("baz"),
+			domain:            []byte("baz"),
+			verifierDomain:    []byte("baz"),
 			timestamp:         nil,
 			maxDrift:          nil,
 			wrongKey:          false,
@@ -84,6 +108,8 @@ func TestSignVerify(t *testing.T) {
 			msgToSign:         []byte("foo!"),
 			msgToAuth:         []byte(""),
 			verifierMsgToAuth: []byte(""),
+			domain:            []byte("baz"),
+			verifierDomain:    []byte("baz"),
 			timestamp:         nil,
 			maxDrift:          nil,
 			wrongKey:          true,
@@ -94,6 +120,8 @@ func TestSignVerify(t *testing.T) {
 			msgToSign:         []byte("foo"),
 			msgToAuth:         []byte("bar"),
 			verifierMsgToAuth: []byte("bar"),
+			domain:            []byte("baz"),
+			verifierDomain:    []byte("baz"),
 			timestamp:         ptr(now - 120),
 			maxDrift:          uptr(60),
 			wrongKey:          false,
@@ -104,6 +132,8 @@ func TestSignVerify(t *testing.T) {
 			msgToSign:         []byte("foo"),
 			msgToAuth:         []byte("bar"),
 			verifierMsgToAuth: []byte("bar"),
+			domain:            []byte("baz"),
+			verifierDomain:    []byte("baz"),
 			timestamp:         ptr(now + 120),
 			maxDrift:          uptr(60),
 			wrongKey:          false,
@@ -118,9 +148,9 @@ func TestSignVerify(t *testing.T) {
 
 			var signed []byte
 			if tt.timestamp != nil {
-				signed = SignAt(tt.msgToSign, tt.msgToAuth, alice, *tt.timestamp)
+				signed = SignAt(tt.msgToSign, tt.msgToAuth, alice, tt.domain, *tt.timestamp)
 			} else {
-				signed = Sign(tt.msgToSign, tt.msgToAuth, alice)
+				signed = Sign(tt.msgToSign, tt.msgToAuth, alice, tt.domain)
 			}
 
 			verifier := alice.PublicKey()
@@ -128,7 +158,7 @@ func TestSignVerify(t *testing.T) {
 				verifier = bobby.PublicKey()
 			}
 
-			recovered, err := Verify(signed, tt.verifierMsgToAuth, verifier, tt.maxDrift)
+			recovered, err := Verify(signed, tt.verifierMsgToAuth, verifier, tt.verifierDomain, tt.maxDrift)
 
 			if tt.wantOK {
 				if err != nil {
@@ -329,11 +359,11 @@ func TestSignVerifyCBOR(t *testing.T) {
 	msg := testPayload{Num: 42, Str: "foo"}
 	auth := testAAD{Str: "bar"}
 
-	signed, err := SignCBOR(&msg, &auth, alice)
+	signed, err := SignCBOR(&msg, &auth, alice, []byte("baz"))
 	if err != nil {
 		t.Fatalf("sign failed: %v", err)
 	}
-	recovered, err := VerifyCBOR[testPayload](signed, &auth, alice.PublicKey(), nil)
+	recovered, err := VerifyCBOR[testPayload](signed, &auth, alice.PublicKey(), []byte("baz"), nil)
 	if err != nil {
 		t.Fatalf("verify failed: %v", err)
 	}
