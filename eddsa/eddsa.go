@@ -20,6 +20,7 @@ import (
 
 	"filippo.io/edwards25519"
 	"github.com/dark-bio/crypto-go/internal/asn1ext"
+	"github.com/dark-bio/crypto-go/internal/base64ext"
 	"github.com/dark-bio/crypto-go/pem"
 	"golang.org/x/crypto/cryptobyte"
 	cbasn1 "golang.org/x/crypto/cryptobyte/asn1"
@@ -259,7 +260,7 @@ func (k *PublicKey) MarshalText() ([]byte, error) {
 
 // UnmarshalText implements encoding.TextUnmarshaler.
 func (k *PublicKey) UnmarshalText(text []byte) error {
-	raw, err := base64.StdEncoding.DecodeString(string(text))
+	raw, err := base64ext.DecodeString(string(text))
 	if err != nil {
 		return err
 	}
@@ -300,7 +301,7 @@ func (s *Signature) MarshalText() ([]byte, error) {
 
 // UnmarshalText implements encoding.TextUnmarshaler.
 func (s *Signature) UnmarshalText(text []byte) error {
-	raw, err := base64.StdEncoding.DecodeString(string(text))
+	raw, err := base64ext.DecodeString(string(text))
 	if err != nil {
 		return err
 	}
@@ -321,7 +322,7 @@ func (f *Fingerprint) MarshalText() ([]byte, error) {
 
 // UnmarshalText implements encoding.TextUnmarshaler.
 func (f *Fingerprint) UnmarshalText(text []byte) error {
-	raw, err := base64.StdEncoding.DecodeString(string(text))
+	raw, err := base64ext.DecodeString(string(text))
 	if err != nil {
 		return err
 	}
