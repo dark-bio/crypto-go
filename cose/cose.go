@@ -316,23 +316,37 @@ func signDetachedAt(msgToAuth []byte, signer xdsa.Signer, domain []byte, timesta
 
 // VerifyDetached validates a COSE_Sign1 digital signature with a detached payload.
 //
+// Uses the current system time for drift checking. For testing or custom
+// timestamps, use VerifyDetachedAt.
+//
 //   - msgToCheck: The serialized COSE_Sign1 structure (with null payload)
 //   - msgToAuth: The same message used during signing (verified but not embedded)
 //   - verifier: The xDSA public key to verify against
 //   - domain: Application domain for replay protection
 //   - maxDrift: Signatures more in the past or future are rejected
-//
-// Returns nil if verification succeeds.
 func VerifyDetached(msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64) error {
+	return VerifyDetachedAt(msgToCheck, msgToAuth, verifier, domain, maxDrift, time.Now().Unix())
+}
+
+// VerifyDetachedAt validates a COSE_Sign1 digital signature with a detached payload
+// and an explicit current time for drift checking.
+//
+//   - msgToCheck: The serialized COSE_Sign1 structure (with null payload)
+//   - msgToAuth: The same message used during signing (verified but not embedded)
+//   - verifier: The xDSA public key to verify against
+//   - domain: Application domain for replay protection
+//   - maxDrift: Signatures more in the past or future are rejected
+//   - now: Unix timestamp in seconds to use for drift checking
+func VerifyDetachedAt(msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) error {
 	auth, err := cbor.Marshal(msgToAuth)
 	if err != nil {
 		return err
 	}
-	return verifyDetached(msgToCheck, auth, verifier, domain, maxDrift)
+	return verifyDetached(msgToCheck, auth, verifier, domain, maxDrift, now)
 }
 
 // verifyDetached validates a COSE_Sign1 digital signature with null payload (internal).
-func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64) error {
+func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) error {
 	// Restrict the user's domain to the context of this library
 	info := []byte(DomainPrefix + string(domain))
 	aad, err := cbor.Marshal(&sigAAD{
@@ -358,7 +372,6 @@ func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, doma
 	}
 	// Check signature timestamp drift if maxDrift is specified
 	if maxDrift != nil {
-		now := time.Now().Unix()
 		drift := now - header.Timestamp
 		if drift < 0 {
 			drift = -drift
@@ -386,6 +399,9 @@ func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, doma
 
 // Verify validates a COSE_Sign1 digital signature and returns the payload.
 //
+// Uses the current system time for drift checking. For testing or custom
+// timestamps, use VerifyAt.
+//
 //   - msgToCheck: The serialized COSE_Sign1 structure
 //   - msgToAuth: The same additional authenticated data used during signing
 //   - verifier: The xDSA public key to verify against
@@ -394,12 +410,27 @@ func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, doma
 //
 // Returns the CBOR-decoded payload if verification succeeds.
 func Verify[T any](msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64) (T, error) {
+	return VerifyAt[T](msgToCheck, msgToAuth, verifier, domain, maxDrift, time.Now().Unix())
+}
+
+// VerifyAt validates a COSE_Sign1 digital signature and returns the payload,
+// using an explicit current time for drift checking.
+//
+//   - msgToCheck: The serialized COSE_Sign1 structure
+//   - msgToAuth: The same additional authenticated data used during signing
+//   - verifier: The xDSA public key to verify against
+//   - domain: Application domain for replay protection
+//   - maxDrift: Signatures more in the past or future are rejected
+//   - now: Unix timestamp in seconds to use for drift checking
+//
+// Returns the CBOR-decoded payload if verification succeeds.
+func VerifyAt[T any](msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) (T, error) {
 	var zero T
 	auth, err := cbor.Marshal(msgToAuth)
 	if err != nil {
 		return zero, err
 	}
-	payload, err := verify(msgToCheck, auth, verifier, domain, maxDrift)
+	payload, err := verify(msgToCheck, auth, verifier, domain, maxDrift, now)
 	if err != nil {
 		return zero, err
 	}
@@ -411,7 +442,7 @@ func Verify[T any](msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, d
 }
 
 // verify validates a COSE_Sign1 digital signature and returns the payload (internal).
-func verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64) ([]byte, error) {
+func verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) ([]byte, error) {
 	// Restrict the user's domain to the context of this library
 	info := []byte(DomainPrefix + string(domain))
 	aad, err := cbor.Marshal(&sigAAD{
@@ -437,7 +468,6 @@ func verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byt
 	}
 	// Check signature timestamp drift if maxDrift is specified
 	if maxDrift != nil {
-		now := time.Now().Unix()
 		drift := now - header.Timestamp
 		if drift < 0 {
 			drift = -drift
@@ -544,6 +574,9 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 
 // Open decrypts and verifies a sealed message, returning the payload.
 //
+// Uses the current system time for drift checking. For testing or custom
+// timestamps, use OpenAt.
+//
 //   - msgToOpen: The serialized COSE_Encrypt0 structure
 //   - msgToAuth: The same additional authenticated data used during sealing
 //   - recipient: The xHPKE secret key to decrypt with
@@ -553,6 +586,22 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 //
 // Returns the CBOR-decoded payload if decryption and verification succeed.
 func Open[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain []byte, maxDrift *uint64) (T, error) {
+	return OpenAt[T](msgToOpen, msgToAuth, recipient, sender, domain, maxDrift, time.Now().Unix())
+}
+
+// OpenAt decrypts and verifies a sealed message with an explicit current time
+// for drift checking.
+//
+//   - msgToOpen: The serialized COSE_Encrypt0 structure
+//   - msgToAuth: The same additional authenticated data used during sealing
+//   - recipient: The xHPKE secret key to decrypt with
+//   - sender: The xDSA public key to verify the signature against
+//   - domain: Application domain for HPKE key derivation
+//   - maxDrift: Signatures more in the past or future are rejected
+//   - now: Unix timestamp in seconds to use for drift checking
+//
+// Returns the CBOR-decoded payload if decryption and verification succeed.
+func OpenAt[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) (T, error) {
 	var zero T
 
 	// Pre-encode for internal use
@@ -595,7 +644,7 @@ func Open[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, se
 		return zero, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
 	// Verify the signature and extract the payload
-	payload, err := verify(signed, auth, sender, domain, maxDrift)
+	payload, err := verify(signed, auth, sender, domain, maxDrift, now)
 	if err != nil {
 		return zero, err
 	}
