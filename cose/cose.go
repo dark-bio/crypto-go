@@ -493,6 +493,27 @@ func verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byt
 	return sign1.Payload, nil
 }
 
+// Signer extracts the signer's fingerprint from a COSE_Sign1 signature without
+// verifying it.
+//
+// This allows looking up the appropriate verification key before attempting
+// full signature verification.
+//
+//   - signature: The serialized COSE_Sign1 structure
+//
+// Returns the signer's fingerprint from the protected header's kid field.
+func Signer(signature []byte) (xdsa.Fingerprint, error) {
+	var sign1 coseSign1
+	if err := cbor.Unmarshal(signature, &sign1); err != nil {
+		return xdsa.Fingerprint{}, err
+	}
+	var header sigProtectedHeader
+	if err := cbor.Unmarshal(sign1.Protected, &header); err != nil {
+		return xdsa.Fingerprint{}, err
+	}
+	return header.Kid, nil
+}
+
 // Seal signs a message then encrypts it to a recipient.
 //
 // Uses the current system time as the signature timestamp. For testing or custom
