@@ -85,8 +85,7 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 		return nil
 
 	case reflect.String:
-		enc.EncodeText(v.String())
-		return nil
+		return enc.EncodeText(v.String())
 
 	case reflect.Slice:
 		// Check for Raw type - pass through bytes directly

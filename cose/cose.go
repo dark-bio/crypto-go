@@ -56,9 +56,17 @@ var (
 
 // sigProtectedHeader is the protected header for COSE_Sign1.
 type sigProtectedHeader struct {
-	Algorithm int64    `cbor:"1,key"`
-	Kid       [32]byte `cbor:"4,key"`
-	Timestamp int64    `cbor:"-70002,key"`
+	Algorithm int64      `cbor:"1,key"`
+	Crit      critHeader `cbor:"2,key"`
+	Kid       [32]byte   `cbor:"4,key"`
+	Timestamp int64      `cbor:"-70002,key"`
+}
+
+// critHeader lists the critical headers that must be understood.
+// Per RFC 9052, implementations must reject messages with unknown crit labels.
+type critHeader struct {
+	_         struct{} `cbor:"_,array"`
+	Timestamp int64    // HeaderTimestamp label
 }
 
 // encProtectedHeader is the protected header for COSE_Encrypt0.
@@ -224,6 +232,7 @@ func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, tim
 	// Build protected header
 	protected, err := cbor.Marshal(&sigProtectedHeader{
 		Algorithm: algorithmXDSA,
+		Crit:      critHeader{Timestamp: HeaderTimestamp},
 		Kid:       signer.PublicKey().Fingerprint(),
 		Timestamp: timestamp,
 	})
@@ -271,6 +280,7 @@ func signDetachedAt(msgToAuth []byte, signer xdsa.Signer, domain []byte, timesta
 	// Build protected header
 	protected, err := cbor.Marshal(&sigProtectedHeader{
 		Algorithm: algorithmXDSA,
+		Crit:      critHeader{Timestamp: HeaderTimestamp},
 		Kid:       signer.PublicKey().Fingerprint(),
 		Timestamp: timestamp,
 	})
@@ -598,6 +608,7 @@ func Open[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, se
 
 // verifySigProtectedHeader verifies the signature protected header contains exactly
 // the expected algorithm and that the key identifier matches the provided verifier.
+// Also verifies the crit header contains the expected critical labels.
 func verifySigProtectedHeader(data []byte, expectedAlg int64, verifier *xdsa.PublicKey) (*sigProtectedHeader, error) {
 	var header sigProtectedHeader
 	if err := cbor.Unmarshal(data, &header); err != nil {
@@ -605,6 +616,9 @@ func verifySigProtectedHeader(data []byte, expectedAlg int64, verifier *xdsa.Pub
 	}
 	if header.Algorithm != expectedAlg {
 		return nil, fmt.Errorf("%w: got %d, want %d", ErrUnexpectedAlgorithm, header.Algorithm, expectedAlg)
+	}
+	if header.Crit.Timestamp != HeaderTimestamp {
+		return nil, fmt.Errorf("%w: crit missing required label %d", ErrUnexpectedAlgorithm, HeaderTimestamp)
 	}
 	if header.Kid != verifier.Fingerprint() {
 		return nil, fmt.Errorf("%w: got %x, want %x", ErrUnexpectedKey, header.Kid, verifier.Fingerprint())

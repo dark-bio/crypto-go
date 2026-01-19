@@ -114,9 +114,14 @@ func (e *Encoder) EncodeBytes(value []byte) {
 }
 
 // EncodeText encodes a UTF-8 text string.
-func (e *Encoder) EncodeText(value string) {
+// Returns an error if the string contains invalid UTF-8.
+func (e *Encoder) EncodeText(value string) error {
+	if !utf8.ValidString(value) {
+		return ErrInvalidUTF8
+	}
 	e.encodeLength(majorText, uint64(len(value)))
 	e.buf = append(e.buf, value...)
+	return nil
 }
 
 // EncodeArrayHeader encodes an array size.
