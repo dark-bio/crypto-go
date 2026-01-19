@@ -676,6 +676,27 @@ func OpenAt[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, 
 	return result, nil
 }
 
+// Recipient extracts the recipient's fingerprint from a COSE_Encrypt0 message
+// without decrypting it.
+//
+// This allows looking up the appropriate decryption key before attempting
+// full decryption.
+//
+//   - ciphertext: The serialized COSE_Encrypt0 structure
+//
+// Returns the recipient's fingerprint from the protected header's kid field.
+func Recipient(ciphertext []byte) (xhpke.Fingerprint, error) {
+	var encrypt0 coseEncrypt0
+	if err := cbor.Unmarshal(ciphertext, &encrypt0); err != nil {
+		return xhpke.Fingerprint{}, err
+	}
+	var header encProtectedHeader
+	if err := cbor.Unmarshal(encrypt0.Protected, &header); err != nil {
+		return xhpke.Fingerprint{}, err
+	}
+	return header.Kid, nil
+}
+
 // verifySigProtectedHeader verifies the signature protected header contains exactly
 // the expected algorithm and that the key identifier matches the provided verifier.
 // Also verifies the crit header contains the expected critical labels.
