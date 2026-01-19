@@ -11,6 +11,8 @@
 // This is an implementation of the CBOR spec with an extremely reduced type
 // system, focusing on security rather than flexibility or completeness. The
 // following types are supported:
+//   - Booleans:                bool
+//   - Null:                    structs with cbor:"optional" tag, cbor.Null, cbor.Option
 //   - 64bit positive integers: uint64
 //   - 64bit signed integers:   int64
 //   - UTF-8 text strings:      string
@@ -30,12 +32,13 @@ import (
 
 // Supported CBOR major types
 const (
-	majorUint  = 0
-	majorNint  = 1
-	majorBytes = 2
-	majorText  = 3
-	majorArray = 4
-	majorMap   = 5
+	majorUint   = 0
+	majorNint   = 1
+	majorBytes  = 2
+	majorText   = 3
+	majorArray  = 4
+	majorMap    = 5
+	majorSimple = 7
 )
 
 // Additional info values
@@ -44,6 +47,13 @@ const (
 	infoUint16 = 25
 	infoUint32 = 26
 	infoUint64 = 27
+)
+
+// Simple values (major type 7)
+const (
+	simpleFalse = 20
+	simpleTrue  = 21
+	simpleNull  = 22
 )
 
 // maxInt is the maximum value of int, used for overflow checks.
@@ -62,6 +72,8 @@ var (
 	ErrIntegerOverflow       = errors.New("integer overflow")
 	ErrDuplicateMapKey       = errors.New("duplicate map key")
 	ErrInvalidMapKeyOrder    = errors.New("invalid map key order")
+	ErrUnexpectedNil         = errors.New("unexpected nil value (field not marked optional)")
+	ErrUnexpectedNull        = errors.New("unexpected null value (field not marked optional)")
 )
 
 // Encoder is the low-level implementation of the CBOR encoder with only the
@@ -115,6 +127,20 @@ func (e *Encoder) EncodeArrayHeader(length int) {
 // EncodeMapHeader encodes a map size.
 func (e *Encoder) EncodeMapHeader(length int) {
 	e.encodeLength(majorMap, uint64(length))
+}
+
+// EncodeBool encodes a CBOR boolean value.
+func (e *Encoder) EncodeBool(value bool) {
+	if value {
+		e.buf = append(e.buf, majorSimple<<5|simpleTrue)
+	} else {
+		e.buf = append(e.buf, majorSimple<<5|simpleFalse)
+	}
+}
+
+// EncodeNull encodes a CBOR null value.
+func (e *Encoder) EncodeNull() {
+	e.buf = append(e.buf, majorSimple<<5|simpleNull)
 }
 
 // encodeLength encodes a major type with an unsigned integer, which defines
@@ -282,6 +308,42 @@ func (d *Decoder) DecodeMapHeader() (uint64, error) {
 	return length, nil
 }
 
+// DecodeBool decodes a CBOR boolean value.
+func (d *Decoder) DecodeBool() (bool, error) {
+	if d.pos >= len(d.data) {
+		return false, ErrUnexpectedEOF
+	}
+	b := d.data[d.pos]
+	switch b {
+	case majorSimple<<5 | simpleFalse:
+		d.pos++
+		return false, nil
+	case majorSimple<<5 | simpleTrue:
+		d.pos++
+		return true, nil
+	default:
+		return false, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, b>>5, majorSimple)
+	}
+}
+
+// DecodeNull decodes a CBOR null value.
+func (d *Decoder) DecodeNull() error {
+	if d.pos >= len(d.data) {
+		return ErrUnexpectedEOF
+	}
+	b := d.data[d.pos]
+	if b != majorSimple<<5|simpleNull {
+		return fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, b>>5, majorSimple)
+	}
+	d.pos++
+	return nil
+}
+
+// PeekNull checks if the next value is null without consuming it.
+func (d *Decoder) PeekNull() bool {
+	return d.pos < len(d.data) && d.data[d.pos] == majorSimple<<5|simpleNull
+}
+
 // decodeHeader extracts the major type and the integer value embedded as additional info.
 func (d *Decoder) decodeHeader() (uint8, uint64, error) {
 	// Ensure there's still data left in the buffer
@@ -383,6 +445,10 @@ func mapKeyCmp(a, b int64) int {
 // some part might depend on another (e.g. version tag, method in an RPC, etc).
 type Raw []byte
 
+// Null is a type that encodes/decodes as CBOR null (0xf6).
+// Use this for explicit null values like COSE detached payloads.
+type Null struct{}
+
 // skip_object advances the decoder past one CBOR item without validation. It
 // does do some minimal type checks as walking the CBOR does require walking
 // all the inner fields too.
@@ -417,6 +483,13 @@ func skipObject(dec *Decoder) error {
 			}
 		}
 		return nil
+
+	case majorSimple:
+		// Only bool and null are permitted
+		if value == simpleFalse || value == simpleTrue || value == simpleNull {
+			return nil
+		}
+		return fmt.Errorf("%w: major type %d, simple value %d", ErrUnsupportedType, major, value)
 
 	default:
 		return fmt.Errorf("%w: major type %d", ErrUnsupportedType, major)
@@ -486,6 +559,13 @@ func verifyObject(dec *Decoder) error {
 			}
 		}
 		return nil
+
+	case majorSimple:
+		// Only bool and null are permitted
+		if value == simpleFalse || value == simpleTrue || value == simpleNull {
+			return nil
+		}
+		return fmt.Errorf("%w: major type %d, simple value %d", ErrUnsupportedType, major, value)
 
 	default:
 		return fmt.Errorf("%w: major type %d", ErrUnsupportedType, major)

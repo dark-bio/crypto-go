@@ -721,11 +721,18 @@ func TestRawRejection(t *testing.T) {
 		t.Errorf("Expected ErrUnsupportedType, got %v", err)
 	}
 
-	// Major type 7 (floats/bools) - unsupported
-	floatData := []byte{0xf5}
+	// Major type 7 (bools/null) - now supported, floats still unsupported
+	boolData := []byte{0xf5} // true
+	err = Unmarshal(boolData, &raw)
+	if err != nil {
+		t.Errorf("Raw should accept bool data, got %v", err)
+	}
+
+	// Float16 is still unsupported
+	floatData := []byte{0xf9, 0x3c, 0x00}
 	err = Unmarshal(floatData, &raw)
 	if err == nil {
-		t.Error("Raw should reject float/bool data")
+		t.Error("Raw should reject float data")
 	} else if !errors.Is(err, ErrUnsupportedType) {
 		t.Errorf("Expected ErrUnsupportedType, got %v", err)
 	}
@@ -801,7 +808,7 @@ func TestVerify(t *testing.T) {
 		t.Errorf("Verify tagged: expected ErrUnsupportedType, got %v", err)
 	}
 
-	// Major type 7 (floats/booleans/null/undefined) - unsupported
+	// Booleans and null are now supported
 	for _, tc := range []struct {
 		name string
 		data []byte
@@ -809,6 +816,17 @@ func TestVerify(t *testing.T) {
 		{"false", []byte{0xf4}},
 		{"true", []byte{0xf5}},
 		{"null", []byte{0xf6}},
+	} {
+		if err := Verify(tc.data); err != nil {
+			t.Errorf("Verify %s: should pass, got %v", tc.name, err)
+		}
+	}
+
+	// Floats and undefined are still unsupported
+	for _, tc := range []struct {
+		name string
+		data []byte
+	}{
 		{"undefined", []byte{0xf7}},
 		{"float16", []byte{0xf9, 0x3c, 0x00}},
 		{"float32", []byte{0xfa, 0x3f, 0x80, 0x00, 0x00}},
@@ -831,10 +849,16 @@ func TestVerify(t *testing.T) {
 		t.Errorf("Verify non-canonical: expected ErrNonCanonical, got %v", err)
 	}
 
-	// Nested arrays with invalid content
-	nestedInvalid := []byte{0x81, 0xf4} // [false]
-	if err := Verify(nestedInvalid); !errors.Is(err, ErrUnsupportedType) {
-		t.Errorf("Verify nested invalid: expected ErrUnsupportedType, got %v", err)
+	// Nested arrays with booleans are now valid
+	nestedBool := []byte{0x81, 0xf4} // [false]
+	if err := Verify(nestedBool); err != nil {
+		t.Errorf("Verify nested bool: should pass, got %v", err)
+	}
+
+	// Nested arrays with floats are still invalid
+	nestedFloat := []byte{0x81, 0xf9, 0x3c, 0x00} // [1.0 as float16]
+	if err := Verify(nestedFloat); !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("Verify nested float: expected ErrUnsupportedType, got %v", err)
 	}
 
 	// Incomplete data
@@ -847,5 +871,82 @@ func TestVerify(t *testing.T) {
 	invalidInfo := []byte{0x1c} // UINT with additional info 28 (reserved)
 	if err := Verify(invalidInfo); !errors.Is(err, ErrInvalidAdditionalInfo) {
 		t.Errorf("Verify invalid info: expected ErrInvalidAdditionalInfo, got %v", err)
+	}
+}
+
+// Tests that Option[T] encodes and decodes correctly for top-level optional values.
+func TestOptionEncoding(t *testing.T) {
+	// Some(42) should encode as the inner value
+	some := MakeSome[uint64](42)
+	data, err := Marshal(some)
+	if err != nil {
+		t.Fatalf("Marshal(Some(42)) error: %v", err)
+	}
+	expected := []byte{0x18, 0x2a} // uint 42
+	if !bytes.Equal(data, expected) {
+		t.Errorf("Marshal(Some(42)): got %x, want %x", data, expected)
+	}
+
+	// None should encode as null
+	none := MakeNone[uint64]()
+	data, err = Marshal(none)
+	if err != nil {
+		t.Fatalf("Marshal(None) error: %v", err)
+	}
+	expected = []byte{0xf6} // null
+	if !bytes.Equal(data, expected) {
+		t.Errorf("Marshal(None): got %x, want %x", data, expected)
+	}
+}
+
+// Tests that Option[T] decodes correctly from CBOR.
+func TestOptionDecoding(t *testing.T) {
+	// Decode Some(42)
+	var some Option[uint64]
+	if err := Unmarshal([]byte{0x18, 0x2a}, &some); err != nil {
+		t.Fatalf("Unmarshal(Some(42)) error: %v", err)
+	}
+	if !some.Some || some.Value != 42 {
+		t.Errorf("Unmarshal(Some(42)): got Some=%v, Value=%v, want Some=true, Value=42", some.Some, some.Value)
+	}
+
+	// Decode None
+	var none Option[uint64]
+	if err := Unmarshal([]byte{0xf6}, &none); err != nil {
+		t.Fatalf("Unmarshal(None) error: %v", err)
+	}
+	if none.Some {
+		t.Errorf("Unmarshal(None): got Some=true, want Some=false")
+	}
+}
+
+// Tests that Option[T] works with complex inner types.
+func TestOptionComplexTypes(t *testing.T) {
+	// Option[string]
+	someStr := MakeSome("hello")
+	data, err := Marshal(someStr)
+	if err != nil {
+		t.Fatalf("Marshal(Some(\"hello\")) error: %v", err)
+	}
+	var decoded Option[string]
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal(Some(\"hello\")) error: %v", err)
+	}
+	if !decoded.Some || decoded.Value != "hello" {
+		t.Errorf("Option[string] roundtrip failed: got %+v", decoded)
+	}
+
+	// Option[[]byte]
+	someBytes := MakeSome([]byte{1, 2, 3})
+	data, err = Marshal(someBytes)
+	if err != nil {
+		t.Fatalf("Marshal(Some([]byte)) error: %v", err)
+	}
+	var decodedBytes Option[[]byte]
+	if err := Unmarshal(data, &decodedBytes); err != nil {
+		t.Fatalf("Unmarshal(Some([]byte)) error: %v", err)
+	}
+	if !decodedBytes.Some || !bytes.Equal(decodedBytes.Value, []byte{1, 2, 3}) {
+		t.Errorf("Option[[]byte] roundtrip failed: got %+v", decodedBytes)
 	}
 }

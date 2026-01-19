@@ -47,6 +47,7 @@ var (
 	ErrUnexpectedAlgorithm = errors.New("cose: unexpected algorithm")
 	ErrUnexpectedKey       = errors.New("cose: unexpected key")
 	ErrUnexpectedPayload   = errors.New("cose: unexpected payload in detached signature")
+	ErrMissingPayload      = errors.New("cose: missing payload in embedded signature")
 	ErrInvalidSignature    = errors.New("cose: signature verification failed")
 	ErrStaleSignature      = errors.New("cose: signature stale")
 	ErrInvalidEncapKeySize = errors.New("cose: invalid encapsulated key size")
@@ -79,14 +80,14 @@ type encapKeyHeader struct {
 //	COSE_Sign1 = [
 //	    protected:   bstr,
 //	    unprotected: header_map,
-//	    payload:     bstr,
+//	    payload:     bstr / null,
 //	    signature:   bstr
 //	]
 type coseSign1 struct {
 	_           struct{} `cbor:"_,array"`
 	Protected   []byte
 	Unprotected emptyHeader
-	Payload     []byte
+	Payload     []byte `cbor:"_,optional"` // nil for detached payload (encodes as null per RFC 9052)
 	Signature   [xdsa.SignatureSize]byte
 }
 
@@ -166,7 +167,11 @@ func SignDetached(msgToAuth any, signer xdsa.Signer, domain []byte) ([]byte, err
 //
 // Returns the serialized COSE_Sign1 structure.
 func SignDetachedAt(msgToAuth any, signer xdsa.Signer, domain []byte, timestamp int64) ([]byte, error) {
-	return SignAt(cbor.Unit{}, msgToAuth, signer, domain, timestamp)
+	auth, err := cbor.Marshal(msgToAuth)
+	if err != nil {
+		return nil, err
+	}
+	return signDetachedAt(auth, signer, domain, timestamp), nil
 }
 
 // Sign creates a COSE_Sign1 digital signature of the msgToEmbed.
@@ -252,9 +257,56 @@ func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, tim
 	return result
 }
 
+// signDetachedAt creates a COSE_Sign1 digital signature with null payload (internal).
+func signDetachedAt(msgToAuth []byte, signer xdsa.Signer, domain []byte, timestamp int64) []byte {
+	// Restrict the user's domain to the context of this library
+	info := []byte(DomainPrefix + string(domain))
+	aad, err := cbor.Marshal(&sigAAD{
+		Info:      info,
+		MsgToAuth: msgToAuth,
+	})
+	if err != nil {
+		panic(err) // cannot fail, be loud if it does
+	}
+	// Build protected header
+	protected, err := cbor.Marshal(&sigProtectedHeader{
+		Algorithm: algorithmXDSA,
+		Kid:       signer.PublicKey().Fingerprint(),
+		Timestamp: timestamp,
+	})
+	if err != nil {
+		panic(err) // cannot fail, be loud if it does
+	}
+	// Build and sign Sig_structure with empty payload for detached mode
+	sig := sigStructure{
+		Context:     "Signature1",
+		Protected:   protected,
+		ExternalAAD: aad,
+		Payload:     []byte{},
+	}
+	toBeSigned, err := cbor.Marshal(&sig)
+	if err != nil {
+		panic(err) // cannot fail, be loud if it does
+	}
+	signature, _ := signer.Sign(toBeSigned)
+
+	// Build and encode COSE_Sign1 with null payload
+	sign1 := coseSign1{
+		Protected:   protected,
+		Unprotected: emptyHeader{},
+		Payload:     nil, // null payload for detached
+		Signature:   *signature,
+	}
+	result, err := cbor.Marshal(&sign1)
+	if err != nil {
+		panic(err) // cannot fail, be loud if it does
+	}
+	return result
+}
+
 // VerifyDetached validates a COSE_Sign1 digital signature with a detached payload.
 //
-//   - msgToCheck: The serialized COSE_Sign1 structure (with empty payload)
+//   - msgToCheck: The serialized COSE_Sign1 structure (with null payload)
 //   - msgToAuth: The same message used during signing (verified but not embedded)
 //   - verifier: The xDSA public key to verify against
 //   - domain: Application domain for replay protection
@@ -262,12 +314,62 @@ func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, tim
 //
 // Returns nil if verification succeeds.
 func VerifyDetached(msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64) error {
-	payload, err := Verify[cbor.Unit](msgToCheck, msgToAuth, verifier, domain, maxDrift)
+	auth, err := cbor.Marshal(msgToAuth)
 	if err != nil {
 		return err
 	}
-	if payload != (cbor.Unit{}) {
+	return verifyDetached(msgToCheck, auth, verifier, domain, maxDrift)
+}
+
+// verifyDetached validates a COSE_Sign1 digital signature with null payload (internal).
+func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64) error {
+	// Restrict the user's domain to the context of this library
+	info := []byte(DomainPrefix + string(domain))
+	aad, err := cbor.Marshal(&sigAAD{
+		Info:      info,
+		MsgToAuth: msgToAuth,
+	})
+	if err != nil {
+		return err
+	}
+	// Parse COSE_Sign1
+	var sign1 coseSign1
+	if err := cbor.Unmarshal(msgToCheck, &sign1); err != nil {
+		return err
+	}
+	// Verify payload is null (detached)
+	if sign1.Payload != nil {
 		return ErrUnexpectedPayload
+	}
+	// Verify the protected header
+	header, err := verifySigProtectedHeader(sign1.Protected, algorithmXDSA, verifier)
+	if err != nil {
+		return err
+	}
+	// Check signature timestamp drift if maxDrift is specified
+	if maxDrift != nil {
+		now := time.Now().Unix()
+		drift := now - header.Timestamp
+		if drift < 0 {
+			drift = -drift
+		}
+		if uint64(drift) > *maxDrift {
+			return fmt.Errorf("%w: time drift %ds exceeds max %ds", ErrStaleSignature, drift, *maxDrift)
+		}
+	}
+	// Reconstruct Sig_structure to verify (empty payload for detached mode)
+	sig := sigStructure{
+		Context:     "Signature1",
+		Protected:   sign1.Protected,
+		ExternalAAD: aad,
+		Payload:     []byte{},
+	}
+	toBeSigned, _ := cbor.Marshal(&sig)
+
+	// Verify signature
+	var xdsasig xdsa.Signature = sign1.Signature
+	if err := verifier.Verify(toBeSigned, &xdsasig); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidSignature, err)
 	}
 	return nil
 }
@@ -313,6 +415,10 @@ func verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byt
 	var sign1 coseSign1
 	if err := cbor.Unmarshal(msgToCheck, &sign1); err != nil {
 		return nil, err
+	}
+	// Verify payload is present (embedded)
+	if sign1.Payload == nil {
+		return nil, ErrMissingPayload
 	}
 	// Verify the protected header
 	header, err := verifySigProtectedHeader(sign1.Protected, algorithmXDSA, verifier)
