@@ -29,6 +29,13 @@ func Marshal(v any) ([]byte, error) {
 	return enc.Bytes(), nil
 }
 
+// Unit is a special type that encodes as an empty CBOR array, matching Rust's () unit type.
+// Use this for "nothing" values like detached signature payloads.
+type Unit struct{}
+
+// unitType is used for type comparison in reflection.
+var unitType = reflect.TypeOf(Unit{})
+
 // encodeValue recursively encodes a reflect.Value to CBOR.
 func encodeValue(enc *Encoder, v reflect.Value) error {
 	switch v.Kind() {
@@ -72,14 +79,14 @@ func encodeValue(enc *Encoder, v reflect.Value) error {
 	case reflect.Struct:
 		t := v.Type()
 
-		// Count exportable fields
-		fields := structFields(t)
-
-		// Special case: empty struct encodes as empty array (matches Rust's () unit type)
-		if len(fields) == 0 {
+		// Special case: Unit encodes as empty array (matches Rust's () unit type)
+		if t == unitType {
 			enc.EncodeArrayHeader(0)
 			return nil
 		}
+		// Count exportable fields
+		fields := structFields(t)
+
 		// Check for array or tomap tag on the struct
 		if wantArray(t) {
 			enc.EncodeArrayHeader(len(fields))
@@ -202,10 +209,9 @@ func decodeValue(dec *Decoder, v reflect.Value) error {
 
 	case reflect.Struct:
 		t := v.Type()
-		fields := structFields(t)
 
-		// Special case: empty struct decodes from empty array (matches Rust's () unit type)
-		if len(fields) == 0 {
+		// Special case: Unit decodes from empty array (matches Rust's () unit type)
+		if t == unitType {
 			length, err := dec.DecodeArrayHeader()
 			if err != nil {
 				return err
@@ -215,6 +221,8 @@ func decodeValue(dec *Decoder, v reflect.Value) error {
 			}
 			return nil
 		}
+		fields := structFields(t)
+
 		// Check if this is an array struct or tomap struct
 		if wantArray(t) {
 			length, err := dec.DecodeArrayHeader()

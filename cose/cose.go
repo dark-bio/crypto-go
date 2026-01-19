@@ -166,7 +166,7 @@ func SignDetached(msgToAuth any, signer xdsa.Signer, domain []byte) ([]byte, err
 //
 // Returns the serialized COSE_Sign1 structure.
 func SignDetachedAt(msgToAuth any, signer xdsa.Signer, domain []byte, timestamp int64) ([]byte, error) {
-	return SignAt(struct{}{}, msgToAuth, signer, domain, timestamp)
+	return SignAt(cbor.Unit{}, msgToAuth, signer, domain, timestamp)
 }
 
 // Sign creates a COSE_Sign1 digital signature of the msgToEmbed.
@@ -262,11 +262,11 @@ func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, tim
 //
 // Returns nil if verification succeeds.
 func VerifyDetached(msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64) error {
-	payload, err := Verify[struct{}](msgToCheck, msgToAuth, verifier, domain, maxDrift)
+	payload, err := Verify[cbor.Unit](msgToCheck, msgToAuth, verifier, domain, maxDrift)
 	if err != nil {
 		return err
 	}
-	if payload != (struct{}{}) {
+	if payload != (cbor.Unit{}) {
 		return ErrUnexpectedPayload
 	}
 	return nil
@@ -383,11 +383,8 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 	if err != nil {
 		return nil, err
 	}
-	// Restrict the user's domain to the context of this library
-	info := []byte(DomainPrefix + string(domain))
-
 	// Create a COSE_Sign1 with the payload, binding the AAD
-	signed := signAt(seal, auth, signer, info, timestamp)
+	signed := signAt(seal, auth, signer, domain, timestamp)
 
 	// Build protected header with recipient's fingerprint
 	protected, err := cbor.Marshal(&encProtectedHeader{
@@ -397,6 +394,9 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
+	// Restrict the user's domain to the context of this library
+	info := []byte(DomainPrefix + string(domain))
+
 	// Build and seal Enc_structure
 	enc := encStructure{
 		Context:     "Encrypt0",
@@ -407,7 +407,7 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	encapKey, ciphertext, err := recipient.Seal(signed, aad, domain)
+	encapKey, ciphertext, err := recipient.Seal(signed, aad, info)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
@@ -444,9 +444,6 @@ func Open[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, se
 	if err != nil {
 		return zero, err
 	}
-	// Restrict the user's domain to the context of this library
-	info := []byte(DomainPrefix + string(domain))
-
 	// Parse COSE_Encrypt0
 	var encrypt0 coseEncrypt0
 	if err := cbor.Unmarshal(msgToOpen, &encrypt0); err != nil {
@@ -464,6 +461,9 @@ func Open[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, se
 	var encapKey [xhpke.EncapKeySize]byte
 	copy(encapKey[:], encrypt0.Unprotected.EncapKey)
 
+	// Restrict the user's domain to the context of this library
+	info := []byte(DomainPrefix + string(domain))
+
 	// Rebuild and open Enc_structure
 	enc := encStructure{
 		Context:     "Encrypt0",
@@ -474,12 +474,12 @@ func Open[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, se
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	signed, err := recipient.Open(&encapKey, encrypt0.Ciphertext, aad, domain)
+	signed, err := recipient.Open(&encapKey, encrypt0.Ciphertext, aad, info)
 	if err != nil {
 		return zero, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
 	// Verify the signature and extract the payload
-	payload, err := verify(signed, auth, sender, info, maxDrift)
+	payload, err := verify(signed, auth, sender, domain, maxDrift)
 	if err != nil {
 		return zero, err
 	}
