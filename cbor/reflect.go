@@ -75,6 +75,11 @@ func encodeValue(enc *Encoder, v reflect.Value) error {
 		// Count exportable fields
 		fields := structFields(t)
 
+		// Special case: empty struct encodes as empty array (matches Rust's () unit type)
+		if len(fields) == 0 {
+			enc.EncodeArrayHeader(0)
+			return nil
+		}
 		// Check for array or tomap tag on the struct
 		if wantArray(t) {
 			enc.EncodeArrayHeader(len(fields))
@@ -199,6 +204,17 @@ func decodeValue(dec *Decoder, v reflect.Value) error {
 		t := v.Type()
 		fields := structFields(t)
 
+		// Special case: empty struct decodes from empty array (matches Rust's () unit type)
+		if len(fields) == 0 {
+			length, err := dec.DecodeArrayHeader()
+			if err != nil {
+				return err
+			}
+			if length != 0 {
+				return fmt.Errorf("%w: %d, want %d", ErrUnexpectedItemCount, length, 0)
+			}
+			return nil
+		}
 		// Check if this is an array struct or tomap struct
 		if wantArray(t) {
 			length, err := dec.DecodeArrayHeader()

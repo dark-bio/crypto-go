@@ -7,7 +7,6 @@
 package cose
 
 import (
-	"bytes"
 	"fmt"
 	"testing"
 	"time"
@@ -16,14 +15,25 @@ import (
 	"github.com/dark-bio/crypto-go/xhpke"
 )
 
+type testPayload struct {
+	_   struct{} `cbor:"_,array"`
+	Num uint64
+	Str string
+}
+
+type testAAD struct {
+	_   struct{} `cbor:"_,array"`
+	Str string
+}
+
 // Tests various combinations of signing and verifying ops.
 func TestSignVerify(t *testing.T) {
 	now := time.Now().Unix()
 
 	tests := []struct {
-		msgToSign         []byte
-		msgToAuth         []byte
-		verifierMsgToAuth []byte
+		msgToSign         testPayload
+		msgToAuth         testAAD
+		verifierMsgToAuth testAAD
 		domain            []byte
 		verifierDomain    []byte
 		timestamp         *int64
@@ -33,9 +43,9 @@ func TestSignVerify(t *testing.T) {
 	}{
 		// Valid signature with aad
 		{
-			msgToSign:         []byte("foo"),
-			msgToAuth:         []byte("bar"),
-			verifierMsgToAuth: []byte("bar"),
+			msgToSign:         testPayload{Num: 1, Str: "foo"},
+			msgToAuth:         testAAD{Str: "bar"},
+			verifierMsgToAuth: testAAD{Str: "bar"},
 			domain:            []byte("baz"),
 			verifierDomain:    []byte("baz"),
 			timestamp:         nil,
@@ -45,9 +55,9 @@ func TestSignVerify(t *testing.T) {
 		},
 		// Valid signature, empty aad
 		{
-			msgToSign:         []byte("foobar"),
-			msgToAuth:         []byte(""),
-			verifierMsgToAuth: []byte(""),
+			msgToSign:         testPayload{Num: 2, Str: "foobar"},
+			msgToAuth:         testAAD{Str: ""},
+			verifierMsgToAuth: testAAD{Str: ""},
 			domain:            []byte("baz"),
 			verifierDomain:    []byte("baz"),
 			timestamp:         nil,
@@ -57,9 +67,9 @@ func TestSignVerify(t *testing.T) {
 		},
 		// Valid signature with explicit timestamp, no drift check
 		{
-			msgToSign:         []byte("foo"),
-			msgToAuth:         []byte("bar"),
-			verifierMsgToAuth: []byte("bar"),
+			msgToSign:         testPayload{Num: 3, Str: "foo"},
+			msgToAuth:         testAAD{Str: "bar"},
+			verifierMsgToAuth: testAAD{Str: "bar"},
 			domain:            []byte("baz"),
 			verifierDomain:    []byte("baz"),
 			timestamp:         ptr(now),
@@ -69,9 +79,9 @@ func TestSignVerify(t *testing.T) {
 		},
 		// Valid signature within drift tolerance
 		{
-			msgToSign:         []byte("foo"),
-			msgToAuth:         []byte("bar"),
-			verifierMsgToAuth: []byte("bar"),
+			msgToSign:         testPayload{Num: 4, Str: "foo"},
+			msgToAuth:         testAAD{Str: "bar"},
+			verifierMsgToAuth: testAAD{Str: "bar"},
 			domain:            []byte("baz"),
 			verifierDomain:    []byte("baz"),
 			timestamp:         ptr(now - 30),
@@ -81,9 +91,9 @@ func TestSignVerify(t *testing.T) {
 		},
 		// Wrong domain
 		{
-			msgToSign:         []byte("foo"),
-			msgToAuth:         []byte("bar"),
-			verifierMsgToAuth: []byte("bar"),
+			msgToSign:         testPayload{Num: 5, Str: "foo"},
+			msgToAuth:         testAAD{Str: "bar"},
+			verifierMsgToAuth: testAAD{Str: "bar"},
 			domain:            []byte("baz"),
 			verifierDomain:    []byte("baz2"),
 			timestamp:         nil,
@@ -93,9 +103,9 @@ func TestSignVerify(t *testing.T) {
 		},
 		// Wrong aad
 		{
-			msgToSign:         []byte("foo!"),
-			msgToAuth:         []byte("bar"),
-			verifierMsgToAuth: []byte("baz"),
+			msgToSign:         testPayload{Num: 6, Str: "foo!"},
+			msgToAuth:         testAAD{Str: "bar"},
+			verifierMsgToAuth: testAAD{Str: "baz"},
 			domain:            []byte("baz"),
 			verifierDomain:    []byte("baz"),
 			timestamp:         nil,
@@ -105,9 +115,9 @@ func TestSignVerify(t *testing.T) {
 		},
 		// Wrong key
 		{
-			msgToSign:         []byte("foo!"),
-			msgToAuth:         []byte(""),
-			verifierMsgToAuth: []byte(""),
+			msgToSign:         testPayload{Num: 7, Str: "foo!"},
+			msgToAuth:         testAAD{Str: ""},
+			verifierMsgToAuth: testAAD{Str: ""},
 			domain:            []byte("baz"),
 			verifierDomain:    []byte("baz"),
 			timestamp:         nil,
@@ -117,9 +127,9 @@ func TestSignVerify(t *testing.T) {
 		},
 		// Timestamp too far in the past
 		{
-			msgToSign:         []byte("foo"),
-			msgToAuth:         []byte("bar"),
-			verifierMsgToAuth: []byte("bar"),
+			msgToSign:         testPayload{Num: 8, Str: "foo"},
+			msgToAuth:         testAAD{Str: "bar"},
+			verifierMsgToAuth: testAAD{Str: "bar"},
 			domain:            []byte("baz"),
 			verifierDomain:    []byte("baz"),
 			timestamp:         ptr(now - 120),
@@ -129,9 +139,9 @@ func TestSignVerify(t *testing.T) {
 		},
 		// Timestamp too far in the future
 		{
-			msgToSign:         []byte("foo"),
-			msgToAuth:         []byte("bar"),
-			verifierMsgToAuth: []byte("bar"),
+			msgToSign:         testPayload{Num: 9, Str: "foo"},
+			msgToAuth:         testAAD{Str: "bar"},
+			verifierMsgToAuth: testAAD{Str: "bar"},
 			domain:            []byte("baz"),
 			verifierDomain:    []byte("baz"),
 			timestamp:         ptr(now + 120),
@@ -147,10 +157,14 @@ func TestSignVerify(t *testing.T) {
 			bobby := xdsa.GenerateKey()
 
 			var signed []byte
+			var err error
 			if tt.timestamp != nil {
-				signed = SignAt(tt.msgToSign, tt.msgToAuth, alice, tt.domain, *tt.timestamp)
+				signed, err = SignAt(&tt.msgToSign, &tt.msgToAuth, alice, tt.domain, *tt.timestamp)
 			} else {
-				signed = Sign(tt.msgToSign, tt.msgToAuth, alice, tt.domain)
+				signed, err = Sign(&tt.msgToSign, &tt.msgToAuth, alice, tt.domain)
+			}
+			if err != nil {
+				t.Fatalf("Sign failed: %v", err)
 			}
 
 			verifier := alice.PublicKey()
@@ -158,14 +172,14 @@ func TestSignVerify(t *testing.T) {
 				verifier = bobby.PublicKey()
 			}
 
-			recovered, err := Verify(signed, tt.verifierMsgToAuth, verifier, tt.verifierDomain, tt.maxDrift)
+			recovered, err := Verify[testPayload](signed, &tt.verifierMsgToAuth, verifier, tt.verifierDomain, tt.maxDrift)
 
 			if tt.wantOK {
 				if err != nil {
 					t.Fatalf("expected success, have error: %v", err)
 				}
-				if !bytes.Equal(recovered, tt.msgToSign) {
-					t.Fatalf("payload mismatch: have %q, want %q", recovered, tt.msgToSign)
+				if recovered.Num != tt.msgToSign.Num || recovered.Str != tt.msgToSign.Str {
+					t.Fatalf("payload mismatch: have %+v, want %+v", recovered, tt.msgToSign)
 				}
 			} else {
 				if err == nil {
@@ -181,9 +195,9 @@ func TestSealOpen(t *testing.T) {
 	now := time.Now().Unix()
 
 	tests := []struct {
-		msgToSeal       []byte
-		msgToAuth       []byte
-		openerMsgToAuth []byte
+		msgToSeal       testPayload
+		msgToAuth       testAAD
+		openerMsgToAuth testAAD
 		domain          []byte
 		openerDomain    []byte
 		timestamp       *int64
@@ -193,9 +207,9 @@ func TestSealOpen(t *testing.T) {
 	}{
 		// Valid seal/open with aad
 		{
-			msgToSeal:       []byte("foo"),
-			msgToAuth:       []byte("bar"),
-			openerMsgToAuth: []byte("bar"),
+			msgToSeal:       testPayload{Num: 1, Str: "foo"},
+			msgToAuth:       testAAD{Str: "bar"},
+			openerMsgToAuth: testAAD{Str: "bar"},
 			domain:          []byte("baz"),
 			openerDomain:    []byte("baz"),
 			timestamp:       nil,
@@ -205,9 +219,9 @@ func TestSealOpen(t *testing.T) {
 		},
 		// Valid seal/open, empty aad
 		{
-			msgToSeal:       []byte("foo"),
-			msgToAuth:       []byte(""),
-			openerMsgToAuth: []byte(""),
+			msgToSeal:       testPayload{Num: 2, Str: "foo"},
+			msgToAuth:       testAAD{Str: ""},
+			openerMsgToAuth: testAAD{Str: ""},
 			domain:          []byte("baz"),
 			openerDomain:    []byte("baz"),
 			timestamp:       nil,
@@ -217,9 +231,9 @@ func TestSealOpen(t *testing.T) {
 		},
 		// Valid seal/open, no drift check
 		{
-			msgToSeal:       []byte("foo"),
-			msgToAuth:       []byte("bar"),
-			openerMsgToAuth: []byte("bar"),
+			msgToSeal:       testPayload{Num: 3, Str: "foo"},
+			msgToAuth:       testAAD{Str: "bar"},
+			openerMsgToAuth: testAAD{Str: "bar"},
 			domain:          []byte("baz"),
 			openerDomain:    []byte("baz"),
 			timestamp:       ptr(now),
@@ -229,9 +243,9 @@ func TestSealOpen(t *testing.T) {
 		},
 		// Valid seal/open, valid drift
 		{
-			msgToSeal:       []byte("foo"),
-			msgToAuth:       []byte("bar"),
-			openerMsgToAuth: []byte("bar"),
+			msgToSeal:       testPayload{Num: 4, Str: "foo"},
+			msgToAuth:       testAAD{Str: "bar"},
+			openerMsgToAuth: testAAD{Str: "bar"},
 			domain:          []byte("baz"),
 			openerDomain:    []byte("baz"),
 			timestamp:       ptr(now - 30),
@@ -241,9 +255,9 @@ func TestSealOpen(t *testing.T) {
 		},
 		// Wrong domain
 		{
-			msgToSeal:       []byte("foo"),
-			msgToAuth:       []byte(""),
-			openerMsgToAuth: []byte(""),
+			msgToSeal:       testPayload{Num: 5, Str: "foo"},
+			msgToAuth:       testAAD{Str: ""},
+			openerMsgToAuth: testAAD{Str: ""},
 			domain:          []byte("baz"),
 			openerDomain:    []byte("baz2"),
 			timestamp:       nil,
@@ -253,9 +267,9 @@ func TestSealOpen(t *testing.T) {
 		},
 		// Wrong aad
 		{
-			msgToSeal:       []byte("foo"),
-			msgToAuth:       []byte("bar"),
-			openerMsgToAuth: []byte("bar2"),
+			msgToSeal:       testPayload{Num: 6, Str: "foo"},
+			msgToAuth:       testAAD{Str: "bar"},
+			openerMsgToAuth: testAAD{Str: "bar2"},
 			domain:          []byte("baz"),
 			openerDomain:    []byte("baz"),
 			timestamp:       nil,
@@ -265,9 +279,9 @@ func TestSealOpen(t *testing.T) {
 		},
 		// Wrong signer
 		{
-			msgToSeal:       []byte("foo"),
-			msgToAuth:       []byte(""),
-			openerMsgToAuth: []byte(""),
+			msgToSeal:       testPayload{Num: 7, Str: "foo"},
+			msgToAuth:       testAAD{Str: ""},
+			openerMsgToAuth: testAAD{Str: ""},
 			domain:          []byte("baz"),
 			openerDomain:    []byte("baz"),
 			timestamp:       nil,
@@ -277,9 +291,9 @@ func TestSealOpen(t *testing.T) {
 		},
 		// Timestamp too far in the past
 		{
-			msgToSeal:       []byte("foo"),
-			msgToAuth:       []byte("bar"),
-			openerMsgToAuth: []byte("bar"),
+			msgToSeal:       testPayload{Num: 8, Str: "foo"},
+			msgToAuth:       testAAD{Str: "bar"},
+			openerMsgToAuth: testAAD{Str: "bar"},
 			domain:          []byte("baz"),
 			openerDomain:    []byte("baz"),
 			timestamp:       ptr(now - 120),
@@ -289,9 +303,9 @@ func TestSealOpen(t *testing.T) {
 		},
 		// Timestamp too far in the future
 		{
-			msgToSeal:       []byte("foo"),
-			msgToAuth:       []byte("bar"),
-			openerMsgToAuth: []byte("bar"),
+			msgToSeal:       testPayload{Num: 9, Str: "foo"},
+			msgToAuth:       testAAD{Str: "bar"},
+			openerMsgToAuth: testAAD{Str: "bar"},
 			domain:          []byte("baz"),
 			openerDomain:    []byte("baz"),
 			timestamp:       ptr(now + 120),
@@ -310,9 +324,9 @@ func TestSealOpen(t *testing.T) {
 			var sealed []byte
 			var err error
 			if tt.timestamp != nil {
-				sealed, err = SealAt(tt.msgToSeal, tt.msgToAuth, alice, carol.PublicKey(), tt.domain, *tt.timestamp)
+				sealed, err = SealAt(&tt.msgToSeal, &tt.msgToAuth, alice, carol.PublicKey(), tt.domain, *tt.timestamp)
 			} else {
-				sealed, err = Seal(tt.msgToSeal, tt.msgToAuth, alice, carol.PublicKey(), tt.domain)
+				sealed, err = Seal(&tt.msgToSeal, &tt.msgToAuth, alice, carol.PublicKey(), tt.domain)
 			}
 			if err != nil {
 				t.Fatalf("Seal failed: %v", err)
@@ -323,14 +337,14 @@ func TestSealOpen(t *testing.T) {
 				verifier = bobby.PublicKey()
 			}
 
-			recovered, err := Open(sealed, tt.openerMsgToAuth, carol, verifier, tt.openerDomain, tt.maxDrift)
+			recovered, err := Open[testPayload](sealed, &tt.openerMsgToAuth, carol, verifier, tt.openerDomain, tt.maxDrift)
 
 			if tt.wantOK {
 				if err != nil {
 					t.Fatalf("expected success, have error: %v", err)
 				}
-				if !bytes.Equal(recovered, tt.msgToSeal) {
-					t.Fatalf("payload mismatch: have %q, want %q", recovered, tt.msgToSeal)
+				if recovered.Num != tt.msgToSeal.Num || recovered.Str != tt.msgToSeal.Str {
+					t.Fatalf("payload mismatch: have %+v, want %+v", recovered, tt.msgToSeal)
 				}
 			} else {
 				if err == nil {
@@ -341,55 +355,28 @@ func TestSealOpen(t *testing.T) {
 	}
 }
 
-type testPayload struct {
-	_   struct{} `cbor:"_,array"`
-	Num uint64
-	Str string
-}
-
-type testAAD struct {
-	_   struct{} `cbor:"_,array"`
-	Str string
-}
-
-// Tests CBOR encoding/decoding for sign/verify.
-func TestSignVerifyCBOR(t *testing.T) {
+// Tests detached signing and verification.
+func TestSignVerifyDetached(t *testing.T) {
 	alice := xdsa.GenerateKey()
+	bobby := xdsa.GenerateKey()
 
-	msg := testPayload{Num: 42, Str: "foo"}
-	auth := testAAD{Str: "bar"}
+	msg := testAAD{Str: "hello detached"}
 
-	signed, err := SignCBOR(&msg, &auth, alice, []byte("baz"))
+	signed, err := SignDetached(&msg, alice, []byte("domain"))
 	if err != nil {
-		t.Fatalf("sign failed: %v", err)
+		t.Fatalf("SignDetached failed: %v", err)
 	}
-	recovered, err := VerifyCBOR[testPayload](signed, &auth, alice.PublicKey(), []byte("baz"), nil)
-	if err != nil {
-		t.Fatalf("verify failed: %v", err)
+	// Verify with correct key succeeds
+	if err := VerifyDetached(signed, &msg, alice.PublicKey(), []byte("domain"), nil); err != nil {
+		t.Fatalf("VerifyDetached failed: %v", err)
 	}
-	if recovered.Num != msg.Num || recovered.Str != msg.Str {
-		t.Fatalf("payload mismatch: have %+v, want %+v", recovered, msg)
+	// Verify with wrong key fails
+	if err := VerifyDetached(signed, &msg, bobby.PublicKey(), []byte("domain"), nil); err == nil {
+		t.Fatal("VerifyDetached should have failed with wrong key")
 	}
-}
-
-// Tests CBOR encoding/decoding for seal/open.
-func TestSealOpenCBOR(t *testing.T) {
-	alice := xdsa.GenerateKey()
-	carol := xhpke.GenerateKey()
-
-	msg := testPayload{Num: 123, Str: "foo"}
-	auth := testAAD{Str: "bar"}
-
-	sealed, err := SealCBOR(&msg, &auth, alice, carol.PublicKey(), []byte("baz"))
-	if err != nil {
-		t.Fatalf("seal failed: %v", err)
-	}
-	recovered, err := OpenCBOR[testPayload](sealed, &auth, carol, alice.PublicKey(), []byte("baz"), nil)
-	if err != nil {
-		t.Fatalf("open failed: %v", err)
-	}
-	if recovered.Num != msg.Num || recovered.Str != msg.Str {
-		t.Fatalf("payload mismatch: have %+v, want %+v", recovered, msg)
+	// Verify with wrong message fails
+	if err := VerifyDetached(signed, &testAAD{Str: "wrong"}, alice.PublicKey(), []byte("domain"), nil); err == nil {
+		t.Fatal("VerifyDetached should have failed with wrong message")
 	}
 }
 
