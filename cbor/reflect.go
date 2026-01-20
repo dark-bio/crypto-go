@@ -14,6 +14,18 @@ import (
 	"strings"
 )
 
+// Marshaler is the interface for types to marshal themselves to CBOR.
+type Marshaler interface {
+	MarshalCBOR(enc *Encoder) error
+}
+
+// Unmarshaler is the interface for types to unmarshal themselves from CBOR.
+// Implementations must use the Decoder's methods to decode values, ensuring
+// that type restrictions are enforced even for custom types.
+type Unmarshaler interface {
+	UnmarshalCBOR(dec *Decoder) error
+}
+
 // Marshal encodes a value to CBOR. Supported types:
 //   - uint, uint8, uint16, uint32, uint64: positive integers
 //   - int, int8, int16, int32, int64: signed integers
@@ -21,6 +33,7 @@ import (
 //   - []byte, [N]byte: byte strings
 //   - structs with `cbor:"_,array"` tag: CBOR arrays (fields in order)
 //   - structs with `cbor:"N,key"` tags: CBOR maps with integer keys
+//   - types implementing Marshaler: custom CBOR encoding
 func Marshal(v any) ([]byte, error) {
 	enc := NewEncoder()
 	if err := encodeValue(enc, reflect.ValueOf(v), false); err != nil {
@@ -71,6 +84,17 @@ func isOptionType(t reflect.Type) bool {
 // encodeValue recursively encodes a reflect.Value to CBOR.
 // The optional flag indicates whether nil values are allowed (from struct tag).
 func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
+	// Check if the value implements Marshaler (try pointer first, then value)
+	if v.CanAddr() {
+		if m, ok := v.Addr().Interface().(Marshaler); ok {
+			return m.MarshalCBOR(enc)
+		}
+	}
+	if v.CanInterface() {
+		if m, ok := v.Interface().(Marshaler); ok {
+			return m.MarshalCBOR(enc)
+		}
+	}
 	switch v.Kind() {
 	case reflect.Bool:
 		enc.EncodeBool(v.Bool())
@@ -200,6 +224,19 @@ func Unmarshal(data []byte, v any) error {
 // decodeValue recursively decodes CBOR into a reflect.Value.
 // The optional flag indicates whether null values are allowed (from struct tag).
 func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
+	// Check if the value implements Unmarshaler (must be addressable pointer receiver)
+	if v.Kind() == reflect.Ptr {
+		if v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
+		}
+		if u, ok := v.Interface().(Unmarshaler); ok {
+			return u.UnmarshalCBOR(dec)
+		}
+	} else if v.CanAddr() {
+		if u, ok := v.Addr().Interface().(Unmarshaler); ok {
+			return u.UnmarshalCBOR(dec)
+		}
+	}
 	// Handle pointer types specially - null decodes as nil pointer
 	if v.Kind() == reflect.Ptr {
 		// Option[T] handles null internally, so don't intercept it here

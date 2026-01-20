@@ -56,10 +56,10 @@ var (
 
 // sigProtectedHeader is the protected header for COSE_Sign1.
 type sigProtectedHeader struct {
-	Algorithm int64      `cbor:"1,key"`
-	Crit      critHeader `cbor:"2,key"`
-	Kid       [32]byte   `cbor:"4,key"`
-	Timestamp int64      `cbor:"-70002,key"`
+	Algorithm int64            `cbor:"1,key"`
+	Crit      critHeader       `cbor:"2,key"`
+	Kid       xdsa.Fingerprint `cbor:"4,key"`
+	Timestamp int64            `cbor:"-70002,key"`
 }
 
 // critHeader lists the critical headers that must be understood.
@@ -71,8 +71,8 @@ type critHeader struct {
 
 // encProtectedHeader is the protected header for COSE_Encrypt0.
 type encProtectedHeader struct {
-	Algorithm int64    `cbor:"1,key"`
-	Kid       [32]byte `cbor:"4,key"`
+	Algorithm int64             `cbor:"1,key"`
+	Kid       xhpke.Fingerprint `cbor:"4,key"`
 }
 
 // emptyHeader is an empty unprotected header map (for COSE_Sign1).
@@ -96,7 +96,7 @@ type coseSign1 struct {
 	Protected   []byte
 	Unprotected emptyHeader
 	Payload     []byte `cbor:"_,optional"` // nil for detached payload (encodes as null per RFC 9052)
-	Signature   [xdsa.SignatureSize]byte
+	Signature   xdsa.Signature
 }
 
 // coseEncrypt0 is the COSE_Encrypt0 structure per RFC 9052 Section 5.2.
@@ -593,6 +593,60 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 	return result, nil
 }
 
+// Decrypt decrypts a sealed message without verifying the signature.
+//
+// This allows inspecting the signer (via Signer) before verification. Use
+// Verify or VerifyAt to verify the decrypted COSE_Sign1 bytes.
+//
+//   - msgToOpen: The serialized COSE_Encrypt0 structure
+//   - msgToAuth: The same additional authenticated data used during sealing
+//   - recipient: The xHPKE secret key to decrypt with
+//   - domain: Application domain for HPKE key derivation
+//
+// Returns the decrypted COSE_Sign1 structure (not yet verified).
+func Decrypt(msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, domain []byte) ([]byte, error) {
+	// Pre-encode for internal use
+	auth, err := cbor.Marshal(msgToAuth)
+	if err != nil {
+		return nil, err
+	}
+	// Parse COSE_Encrypt0
+	var encrypt0 coseEncrypt0
+	if err := cbor.Unmarshal(msgToOpen, &encrypt0); err != nil {
+		return nil, err
+	}
+	// Verify protected header
+	if err := verifyEncProtectedHeader(encrypt0.Protected, algorithmXHPKE, recipient); err != nil {
+		return nil, err
+	}
+	// Extract encapsulated key from the unprotected headers
+	if len(encrypt0.Unprotected.EncapKey) != xhpke.EncapKeySize {
+		return nil, fmt.Errorf("%w: got %d, want %d", ErrInvalidEncapKeySize,
+			len(encrypt0.Unprotected.EncapKey), xhpke.EncapKeySize)
+	}
+	var encapKey [xhpke.EncapKeySize]byte
+	copy(encapKey[:], encrypt0.Unprotected.EncapKey)
+
+	// Restrict the user's domain to the context of this library
+	info := []byte(DomainPrefix + string(domain))
+
+	// Rebuild and open Enc_structure
+	enc := encStructure{
+		Context:     "Encrypt0",
+		Protected:   encrypt0.Protected,
+		ExternalAAD: auth,
+	}
+	aad, err := cbor.Marshal(&enc)
+	if err != nil {
+		panic(err) // cannot fail, be loud if it does
+	}
+	signed, err := recipient.Open(&encapKey, encrypt0.Ciphertext, aad, info)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
+	}
+	return signed, nil
+}
+
 // Open decrypts and verifies a sealed message, returning the payload.
 //
 // Uses the current system time for drift checking. For testing or custom
@@ -625,55 +679,17 @@ func Open[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, se
 func OpenAt[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) (T, error) {
 	var zero T
 
-	// Pre-encode for internal use
-	auth, err := cbor.Marshal(msgToAuth)
+	// Decrypt the COSE_Encrypt0 to get the COSE_Sign1
+	signed, err := Decrypt(msgToOpen, msgToAuth, recipient, domain)
 	if err != nil {
 		return zero, err
-	}
-	// Parse COSE_Encrypt0
-	var encrypt0 coseEncrypt0
-	if err := cbor.Unmarshal(msgToOpen, &encrypt0); err != nil {
-		return zero, err
-	}
-	// Verify protected header
-	if err := verifyEncProtectedHeader(encrypt0.Protected, algorithmXHPKE, recipient); err != nil {
-		return zero, err
-	}
-	// Extract encapsulated key from the unprotected headers
-	if len(encrypt0.Unprotected.EncapKey) != xhpke.EncapKeySize {
-		return zero, fmt.Errorf("%w: got %d, want %d", ErrInvalidEncapKeySize,
-			len(encrypt0.Unprotected.EncapKey), xhpke.EncapKeySize)
-	}
-	var encapKey [xhpke.EncapKeySize]byte
-	copy(encapKey[:], encrypt0.Unprotected.EncapKey)
-
-	// Restrict the user's domain to the context of this library
-	info := []byte(DomainPrefix + string(domain))
-
-	// Rebuild and open Enc_structure
-	enc := encStructure{
-		Context:     "Encrypt0",
-		Protected:   encrypt0.Protected,
-		ExternalAAD: auth,
-	}
-	aad, err := cbor.Marshal(&enc)
-	if err != nil {
-		panic(err) // cannot fail, be loud if it does
-	}
-	signed, err := recipient.Open(&encapKey, encrypt0.Ciphertext, aad, info)
-	if err != nil {
-		return zero, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
 	// Verify the signature and extract the payload
-	payload, err := verify(signed, auth, sender, domain, maxDrift, now)
+	payload, err := VerifyAt[T](signed, msgToAuth, sender, domain, maxDrift, now)
 	if err != nil {
 		return zero, err
 	}
-	var result T
-	if err := cbor.Unmarshal(payload, &result); err != nil {
-		return zero, err
-	}
-	return result, nil
+	return payload, nil
 }
 
 // Recipient extracts the recipient's fingerprint from a COSE_Encrypt0 message

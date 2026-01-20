@@ -19,6 +19,7 @@ import (
 	"errors"
 
 	"filippo.io/edwards25519"
+	"github.com/dark-bio/crypto-go/cbor"
 	"github.com/dark-bio/crypto-go/internal/asn1ext"
 	"github.com/dark-bio/crypto-go/internal/base64ext"
 	"github.com/dark-bio/crypto-go/pem"
@@ -281,6 +282,27 @@ func (k *PublicKey) UnmarshalText(text []byte) error {
 func (k *PublicKey) Fingerprint() Fingerprint {
 	raw := k.Marshal()
 	return Fingerprint(sha256.Sum256(raw[:]))
+}
+
+// MarshalCBOR implements cbor.Marshaler.
+func (k *PublicKey) MarshalCBOR(enc *cbor.Encoder) error {
+	b := k.Marshal()
+	enc.EncodeBytes(b[:])
+	return nil
+}
+
+// UnmarshalCBOR implements cbor.Unmarshaler.
+func (k *PublicKey) UnmarshalCBOR(dec *cbor.Decoder) error {
+	b, err := dec.DecodeBytesFixed(PublicKeySize)
+	if err != nil {
+		return err
+	}
+	key, err := ParsePublicKey([PublicKeySize]byte(b))
+	if err != nil {
+		return err
+	}
+	*k = *key
+	return nil
 }
 
 // Verify verifies a digital signature.
