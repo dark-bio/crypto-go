@@ -580,6 +580,27 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 	// Create a COSE_Sign1 with the payload, binding the AAD
 	signed := signAt(seal, auth, signer, domain, timestamp)
 
+	// Encrypt the signed message to the recipient
+	return Encrypt(signed, cbor.Raw(auth), recipient, domain)
+}
+
+// Encrypt encrypts an already-signed COSE_Sign1 to a recipient.
+//
+// For most use cases, prefer Seal which signs and encrypts in one step.
+// Use this only when re-encrypting a message (from Decrypt) to a different
+// recipient without access to the original signer's key.
+//
+//   - sign1: The COSE_Sign1 structure (e.g., from Decrypt)
+//   - msgToAuth: The same additional authenticated data used during sealing
+//   - recipient: The xHPKE public key to encrypt to
+//   - domain: Application domain for HPKE key derivation
+//
+// Returns the serialized COSE_Encrypt0 structure.
+func Encrypt(sign1 []byte, msgToAuth any, recipient *xhpke.PublicKey, domain []byte) ([]byte, error) {
+	auth, err := cbor.Marshal(msgToAuth)
+	if err != nil {
+		return nil, err
+	}
 	// Build protected header with recipient's fingerprint
 	protected, err := cbor.Marshal(&encProtectedHeader{
 		Algorithm: algorithmXHPKE,
@@ -601,7 +622,7 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	encapKey, ciphertext, err := recipient.Seal(signed, aad, info)
+	encapKey, ciphertext, err := recipient.Seal(sign1, aad, info)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
@@ -618,6 +639,51 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 		panic(err) // cannot fail, be loud if it does
 	}
 	return result, nil
+}
+
+// Open decrypts and verifies a sealed message, returning the payload.
+//
+// Uses the current system time for drift checking. For testing or custom
+// timestamps, use OpenAt.
+//
+//   - msgToOpen: The serialized COSE_Encrypt0 structure
+//   - msgToAuth: The same additional authenticated data used during sealing
+//   - recipient: The xHPKE secret key to decrypt with
+//   - sender: The xDSA public key to verify the signature against
+//   - domain: Application domain for HPKE key derivation
+//   - maxDrift: Signatures more in the past or future are rejected
+//
+// Returns the CBOR-decoded payload if decryption and verification succeed.
+func Open[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain []byte, maxDrift *uint64) (T, error) {
+	return OpenAt[T](msgToOpen, msgToAuth, recipient, sender, domain, maxDrift, time.Now().Unix())
+}
+
+// OpenAt decrypts and verifies a sealed message with an explicit current time
+// for drift checking.
+//
+//   - msgToOpen: The serialized COSE_Encrypt0 structure
+//   - msgToAuth: The same additional authenticated data used during sealing
+//   - recipient: The xHPKE secret key to decrypt with
+//   - sender: The xDSA public key to verify the signature against
+//   - domain: Application domain for HPKE key derivation
+//   - maxDrift: Signatures more in the past or future are rejected
+//   - now: Unix timestamp in seconds to use for drift checking
+//
+// Returns the CBOR-decoded payload if decryption and verification succeed.
+func OpenAt[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) (T, error) {
+	var zero T
+
+	// Decrypt the COSE_Encrypt0 to get the COSE_Sign1
+	signed, err := Decrypt(msgToOpen, msgToAuth, recipient, domain)
+	if err != nil {
+		return zero, err
+	}
+	// Verify the signature and extract the payload
+	payload, err := VerifyAt[T](signed, msgToAuth, sender, domain, maxDrift, now)
+	if err != nil {
+		return zero, err
+	}
+	return payload, nil
 }
 
 // Decrypt decrypts a sealed message without verifying the signature.
@@ -672,51 +738,6 @@ func Decrypt(msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, domain
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
 	return signed, nil
-}
-
-// Open decrypts and verifies a sealed message, returning the payload.
-//
-// Uses the current system time for drift checking. For testing or custom
-// timestamps, use OpenAt.
-//
-//   - msgToOpen: The serialized COSE_Encrypt0 structure
-//   - msgToAuth: The same additional authenticated data used during sealing
-//   - recipient: The xHPKE secret key to decrypt with
-//   - sender: The xDSA public key to verify the signature against
-//   - domain: Application domain for HPKE key derivation
-//   - maxDrift: Signatures more in the past or future are rejected
-//
-// Returns the CBOR-decoded payload if decryption and verification succeed.
-func Open[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain []byte, maxDrift *uint64) (T, error) {
-	return OpenAt[T](msgToOpen, msgToAuth, recipient, sender, domain, maxDrift, time.Now().Unix())
-}
-
-// OpenAt decrypts and verifies a sealed message with an explicit current time
-// for drift checking.
-//
-//   - msgToOpen: The serialized COSE_Encrypt0 structure
-//   - msgToAuth: The same additional authenticated data used during sealing
-//   - recipient: The xHPKE secret key to decrypt with
-//   - sender: The xDSA public key to verify the signature against
-//   - domain: Application domain for HPKE key derivation
-//   - maxDrift: Signatures more in the past or future are rejected
-//   - now: Unix timestamp in seconds to use for drift checking
-//
-// Returns the CBOR-decoded payload if decryption and verification succeed.
-func OpenAt[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) (T, error) {
-	var zero T
-
-	// Decrypt the COSE_Encrypt0 to get the COSE_Sign1
-	signed, err := Decrypt(msgToOpen, msgToAuth, recipient, domain)
-	if err != nil {
-		return zero, err
-	}
-	// Verify the signature and extract the payload
-	payload, err := VerifyAt[T](signed, msgToAuth, sender, domain, maxDrift, now)
-	if err != nil {
-		return zero, err
-	}
-	return payload, nil
 }
 
 // Recipient extracts the recipient's fingerprint from a COSE_Encrypt0 message
