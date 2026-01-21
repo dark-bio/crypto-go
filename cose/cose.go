@@ -514,6 +514,33 @@ func Signer(signature []byte) (xdsa.Fingerprint, error) {
 	return header.Kid, nil
 }
 
+// Peek extracts the embedded payload from a COSE_Sign1 signature without
+// verifying it.
+//
+// Warning: This function does NOT verify the signature. The returned payload
+// is unauthenticated and should not be trusted until verified with Verify.
+// Use Signer to extract the signer's fingerprint for key lookup.
+//
+//   - signature: The serialized COSE_Sign1 structure
+//
+// Returns the CBOR-decoded payload.
+func Peek[T any](signature []byte) (T, error) {
+	var zero T
+
+	var sign1 coseSign1
+	if err := cbor.Unmarshal(signature, &sign1); err != nil {
+		return zero, err
+	}
+	if sign1.Payload == nil {
+		return zero, ErrMissingPayload
+	}
+	var payload T
+	if err := cbor.Unmarshal(sign1.Payload, &payload); err != nil {
+		return zero, err
+	}
+	return payload, nil
+}
+
 // Seal signs a message then encrypts it to a recipient.
 //
 // Uses the current system time as the signature timestamp. For testing or custom
