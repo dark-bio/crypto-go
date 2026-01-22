@@ -5,6 +5,8 @@
 
 This repository is parameter selection and lightweight wrapper around a number of Go cryptographic libraries. Its purpose isn't to implement primitives, rather to unify the API surface of existing libraries; limited to the tiny subset needed by the Dark Bio project.
 
+The library is opinionated. Parameters and primitives were selected to provide matching levels of security in a post-quantum world. APIs were designed to make the library easy to use and hard to misuse. Flexibility will always be rejected in favor of safety.
+
 ![](./docs/overview.png)
 
 - Certificates
@@ -26,6 +28,14 @@ This repository is parameter selection and lightweight wrapper around a number o
 - Serialization
   - **CBOR ([RFC-8949](https://datatracker.ietf.org/doc/html/rfc8949))**: restricted to `bool`,`null`, `integer`, `text`, `bytes`, `array`, `map[int]`, `option`
   - **COSE ([RFC-8152](https://datatracker.ietf.org/doc/html/rfc8152))**: `COSE_Sign1`, `COSE_Encrypt0`, `dark-bio-v1:` domain prefix
+
+As a starting point, you will most probably want `xdsa` for digital signatures, `xhpke` for asymmetric encryption and `cose` for proper enveloping.
+
+## CBOR struct tags
+
+The `cbor` package uses Go struct tags to generate encoders and decoders for structs. By default, structs are represented as maps, with the possibility of requesting array encoding.
+
+In map encoding mode, all keys are integers. This is a deliberate restriction to support maps but still force non-wasteful encoding. Each field requires `cbor:"N,key"`. To encode a struct as an array, use `cbor:"_,array"`.
 
 ## Siblings
 
