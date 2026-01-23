@@ -1,4 +1,4 @@
-# Go Cryptography Wrappers
+# Post-Quantum Cryptography in Go
 
 [![](https://pkg.go.dev/badge/github.com/dark-bio/crypto-go.svg)](https://pkg.go.dev/github.com/dark-bio/crypto-go)
 [![](https://github.com/dark-bio/crypto-go/workflows/tests/badge.svg)](https://github.com/dark-bio/crypto-go/actions/workflows/ci.yml)
