@@ -45,6 +45,8 @@ This is a sibling package with the Rust [`github.com/dark-bio/crypto-rs`](https:
 
 The Rust sibling currently has a Flutter binding [`github.com/dark-bio/crypto-fl`](https://github.com/dark-bio/crypto-fl) that exposes the same API surface and versioning; implemented by wrapping the Rust code via FFI rather than reimplementing it.
 
+The Rust sibling also has a TypeScript binding [`github.com/dark-bio/crypto-ts`](https://github.com/dark-bio/crypto-ts) that also exposes the same API surface and versioning; implemented by wrapping the Rust code via WASM rather than reimplementing it.
+
 ## Acknowledgements
 
 Shoutout to Filippo Valsorda ([@filosottile](https://github.com/filosottile)) for lots of tips and nudges on what kind of cryptographic primitives to use and how to combine them properly; and also for his work in general on cryptography standards.
