@@ -59,6 +59,10 @@ const (
 // maxInt is the maximum value of int, used for overflow checks.
 const maxInt = int(^uint(0) >> 1)
 
+// maxDepth is the maximum nesting depth for CBOR arrays and maps. Inputs nested
+// deeper than this are rejected to prevent stack overflow from recursive parsing.
+const maxDepth = 32
+
 // Error types for CBOR encoding/decoding failures
 var (
 	ErrInvalidMajorType      = errors.New("invalid major type")
@@ -74,6 +78,7 @@ var (
 	ErrInvalidMapKeyOrder    = errors.New("invalid map key order")
 	ErrUnexpectedNil         = errors.New("unexpected nil value (field not marked optional)")
 	ErrUnexpectedNull        = errors.New("unexpected null value (field not marked optional)")
+	ErrMaxDepthExceeded      = errors.New("nesting depth exceeds maximum")
 )
 
 // Encoder is the low-level implementation of the CBOR encoder with only the
@@ -454,10 +459,14 @@ type Raw []byte
 // Use this for explicit null values like COSE detached payloads.
 type Null struct{}
 
-// skip_object advances the decoder past one CBOR item without validation. It
+// skipObject advances the decoder past one CBOR item without validation. It
 // does do some minimal type checks as walking the CBOR does require walking
-// all the inner fields too.
-func skipObject(dec *Decoder) error {
+// all the inner fields too. The depth parameter limits nesting to prevent
+// stack overflow from malicious inputs.
+func skipObject(dec *Decoder, depth int) error {
+	if depth == 0 {
+		return fmt.Errorf("%w: %d", ErrMaxDepthExceeded, maxDepth)
+	}
 	major, value, err := dec.decodeHeader()
 	if err != nil {
 		return err
@@ -472,7 +481,7 @@ func skipObject(dec *Decoder) error {
 
 	case majorArray:
 		for range value {
-			if err := skipObject(dec); err != nil {
+			if err := skipObject(dec, depth-1); err != nil {
 				return err
 			}
 		}
@@ -480,17 +489,16 @@ func skipObject(dec *Decoder) error {
 
 	case majorMap:
 		for range value {
-			if err := skipObject(dec); err != nil {
+			if err := skipObject(dec, depth-1); err != nil {
 				return err
 			}
-			if err := skipObject(dec); err != nil {
+			if err := skipObject(dec, depth-1); err != nil {
 				return err
 			}
 		}
 		return nil
 
 	case majorSimple:
-		// Only bool and null are permitted
 		if value == simpleFalse || value == simpleTrue || value == simpleNull {
 			return nil
 		}
@@ -505,14 +513,18 @@ func skipObject(dec *Decoder) error {
 // of types permitted by this package were used.
 func Verify(data []byte) error {
 	dec := NewDecoder(data)
-	if err := verifyObject(dec); err != nil {
+	if err := verifyObject(dec, maxDepth); err != nil {
 		return err
 	}
 	return dec.Finish()
 }
 
-// verifyObject verifies a single CBOR item without full deserialization.
-func verifyObject(dec *Decoder) error {
+// verifyObject verifies a single CBOR item without full deserialization. The
+// depth parameter limits nesting to prevent stack overflow from malicious inputs.
+func verifyObject(dec *Decoder, depth int) error {
+	if depth == 0 {
+		return fmt.Errorf("%w: %d", ErrMaxDepthExceeded, maxDepth)
+	}
 	major, value, err := dec.decodeHeader()
 	if err != nil {
 		return err
@@ -539,16 +551,14 @@ func verifyObject(dec *Decoder) error {
 		return nil
 
 	case majorArray:
-		// Recursively verify each array element
 		for range value {
-			if err := verifyObject(dec); err != nil {
+			if err := verifyObject(dec, depth-1); err != nil {
 				return err
 			}
 		}
 		return nil
 
 	case majorMap:
-		// Verify map has integer keys in deterministic order
 		var prevKey *int64
 		for range value {
 			key, err := dec.DecodeInt()
@@ -559,14 +569,13 @@ func verifyObject(dec *Decoder) error {
 				return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, key, *prevKey)
 			}
 			prevKey = &key
-			if err := verifyObject(dec); err != nil {
+			if err := verifyObject(dec, depth-1); err != nil {
 				return err
 			}
 		}
 		return nil
 
 	case majorSimple:
-		// Only bool and null are permitted
 		if value == simpleFalse || value == simpleTrue || value == simpleNull {
 			return nil
 		}

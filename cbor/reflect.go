@@ -296,7 +296,7 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		// Check for Raw type - capture bytes without parsing
 		if v.Type() == reflect.TypeOf(Raw{}) {
 			start := dec.pos
-			if err := skipObject(dec); err != nil {
+			if err := skipObject(dec, maxDepth); err != nil {
 				return err
 			}
 			v.SetBytes(append([]byte(nil), dec.data[start:dec.pos]...))

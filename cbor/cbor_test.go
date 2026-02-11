@@ -950,3 +950,26 @@ func TestOptionComplexTypes(t *testing.T) {
 		t.Errorf("Option[[]byte] roundtrip failed: got %+v", decodedBytes)
 	}
 }
+
+// Tests that deeply nested CBOR structures are rejected with an error instead
+// of causing a stack overflow, but nesting up to the maximum depth is still
+// accepted.
+func TestMaxNestingDepth(t *testing.T) {
+	atLimit := make([]byte, maxDepth)
+	for i := range atLimit {
+		atLimit[i] = 0x81
+	}
+	atLimit[maxDepth-1] = 0x00
+	if err := Verify(atLimit); err != nil {
+		t.Fatalf("Verify at max depth should succeed: %v", err)
+	}
+
+	overLimit := make([]byte, maxDepth+2)
+	for i := range overLimit {
+		overLimit[i] = 0x81
+	}
+	overLimit[maxDepth+1] = 0x00
+	if err := Verify(overLimit); !errors.Is(err, ErrMaxDepthExceeded) {
+		t.Fatalf("Verify over max depth should fail with ErrMaxDepthExceeded, got: %v", err)
+	}
+}
