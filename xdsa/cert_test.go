@@ -27,55 +27,53 @@ func TestCertParse(t *testing.T) {
 	until := start.Add(time.Hour)
 
 	// Test PEM roundtrip (end-entity cert)
-	pemCert, err := alicePublic.MarshalCertPEM(bobbySecret, &x509.Params{
-		SubjectName: pkix.Name{CommonName: "Alice"},
-		IssuerName:  pkix.Name{CommonName: "Bobby"},
-		NotBefore:   start,
-		NotAfter:    until,
-		IsCA:        false,
-		PathLen:     nil,
+	pemCert, err := IssueCertPEM(alicePublic, bobbySecret, &x509.Template{
+		Subject:   pkix.Name{CommonName: "Alice"},
+		Issuer:    pkix.Name{CommonName: "Bobby"},
+		NotBefore: start,
+		NotAfter:  until,
+		Role:      x509.RoleLeaf(),
 	})
 	if err != nil {
 		t.Fatalf("signing certificate failed: %v", err)
 	}
-	parsedKey, parsedCert, err := ParseCertPEM(pemCert, bobbyPublic)
+	parsed, err := VerifyCertPEM(pemCert, bobbyPublic, x509.ValidityNow())
 	if err != nil {
-		t.Fatalf("ParseCertPEM failed: %v", err)
+		t.Fatalf("VerifyCertPEM failed: %v", err)
 	}
-	if parsedKey.Marshal() != alicePublic.Marshal() {
+	if parsed.PublicKey.Marshal() != alicePublic.Marshal() {
 		t.Error("parsed public key does not match original")
 	}
-	if !parsedCert.NotBefore.Equal(start) {
-		t.Errorf("parsed notBefore %v does not match %v", parsedCert.NotBefore, start)
+	if !parsed.Certificate.NotBefore.Equal(start) {
+		t.Errorf("parsed notBefore %v does not match %v", parsed.Certificate.NotBefore, start)
 	}
-	if !parsedCert.NotAfter.Equal(until) {
-		t.Errorf("parsed notAfter %v does not match %v", parsedCert.NotAfter, until)
+	if !parsed.Certificate.NotAfter.Equal(until) {
+		t.Errorf("parsed notAfter %v does not match %v", parsed.Certificate.NotAfter, until)
 	}
 	// Test DER roundtrip (CA cert with path_len=0)
 	pathLen := uint8(0)
-	derCert, err := alicePublic.MarshalCertDER(bobbySecret, &x509.Params{
-		SubjectName: pkix.Name{CommonName: "Alice"},
-		IssuerName:  pkix.Name{CommonName: "Bobby"},
-		NotBefore:   start,
-		NotAfter:    until,
-		IsCA:        true,
-		PathLen:     &pathLen,
+	derCert, err := IssueCertDER(alicePublic, bobbySecret, &x509.Template{
+		Subject:   pkix.Name{CommonName: "Alice"},
+		Issuer:    pkix.Name{CommonName: "Bobby"},
+		NotBefore: start,
+		NotAfter:  until,
+		Role:      x509.RoleAuthority(&pathLen),
 	})
 	if err != nil {
 		t.Fatalf("signing certificate failed: %v", err)
 	}
-	parsedKey, parsedCert, err = ParseCertDER(derCert, bobbyPublic)
+	parsed, err = VerifyCertDER(derCert, bobbyPublic, x509.ValidityNow())
 	if err != nil {
-		t.Fatalf("ParseCertDER failed: %v", err)
+		t.Fatalf("VerifyCertDER failed: %v", err)
 	}
-	if parsedKey.Marshal() != alicePublic.Marshal() {
+	if parsed.PublicKey.Marshal() != alicePublic.Marshal() {
 		t.Error("parsed public key does not match original")
 	}
-	if !parsedCert.NotBefore.Equal(start) {
-		t.Errorf("parsed notBefore %v does not match %v", parsedCert.NotBefore, start)
+	if !parsed.Certificate.NotBefore.Equal(start) {
+		t.Errorf("parsed notBefore %v does not match %v", parsed.Certificate.NotBefore, start)
 	}
-	if !parsedCert.NotAfter.Equal(until) {
-		t.Errorf("parsed notAfter %v does not match %v", parsedCert.NotAfter, until)
+	if !parsed.Certificate.NotAfter.Equal(until) {
+		t.Errorf("parsed notAfter %v does not match %v", parsed.Certificate.NotAfter, until)
 	}
 }
 
@@ -94,18 +92,138 @@ func TestCertInvalidSigner(t *testing.T) {
 	until := start.Add(time.Hour)
 
 	// Sign a new certificate and verify with the wrong signer
-	pemCert, err := alicePublic.MarshalCertPEM(bobbySecret, &x509.Params{
-		SubjectName: pkix.Name{CommonName: "Alice"},
-		IssuerName:  pkix.Name{CommonName: "Bobby"},
-		NotBefore:   start,
-		NotAfter:    until,
-		IsCA:        false,
-		PathLen:     nil,
+	pemCert, err := IssueCertPEM(alicePublic, bobbySecret, &x509.Template{
+		Subject:   pkix.Name{CommonName: "Alice"},
+		Issuer:    pkix.Name{CommonName: "Bobby"},
+		NotBefore: start,
+		NotAfter:  until,
+		Role:      x509.RoleLeaf(),
 	})
 	if err != nil {
 		t.Fatalf("signing certificate failed: %v", err)
 	}
-	if _, _, err = ParseCertPEM(pemCert, wrongSecret.PublicKey()); err == nil {
+	if _, err = VerifyCertPEM(pemCert, wrongSecret.PublicKey(), x509.ValidityDisabled()); err == nil {
 		t.Error("expected verification to fail with wrong signer")
+	}
+}
+
+// TestCertValidityCheck tests that time-based validity checking works.
+func TestCertValidityCheck(t *testing.T) {
+	aliceSecret := GenerateKey()
+	bobbySecret := GenerateKey()
+	alicePublic := aliceSecret.PublicKey()
+	bobbyPublic := bobbySecret.PublicKey()
+
+	start := time.Now().Truncate(time.Second)
+	until := start.Add(time.Hour)
+
+	derCert, err := IssueCertDER(alicePublic, bobbySecret, &x509.Template{
+		Subject:   pkix.Name{CommonName: "Alice"},
+		Issuer:    pkix.Name{CommonName: "Bobby"},
+		NotBefore: start,
+		NotAfter:  until,
+		Role:      x509.RoleLeaf(),
+	})
+	if err != nil {
+		t.Fatalf("signing certificate failed: %v", err)
+	}
+	// Should succeed with current time (within validity window)
+	if _, err = VerifyCertDER(derCert, bobbyPublic, x509.ValidityNow()); err != nil {
+		t.Fatalf("ValidityNow should succeed: %v", err)
+	}
+	// Should succeed with disabled time check
+	if _, err = VerifyCertDER(derCert, bobbyPublic, x509.ValidityDisabled()); err != nil {
+		t.Fatalf("ValidityDisabled should succeed: %v", err)
+	}
+	// Should fail with a time before the validity window
+	if _, err = VerifyCertDER(derCert, bobbyPublic, x509.ValidityAt(start.Add(-time.Hour))); err == nil {
+		t.Error("expected verification to fail with time before validity window")
+	}
+	// Should fail with a time after the validity window
+	if _, err = VerifyCertDER(derCert, bobbyPublic, x509.ValidityAt(until.Add(time.Hour))); err == nil {
+		t.Error("expected verification to fail with time after validity window")
+	}
+}
+
+// TestCertChainVerification tests the WithIssuerCert chain verification.
+func TestCertChainVerification(t *testing.T) {
+	rootSecret := GenerateKey()
+	childSecret := GenerateKey()
+	rootPublic := rootSecret.PublicKey()
+
+	start := time.Now().Truncate(time.Second)
+	until := start.Add(time.Hour)
+
+	// Issue a CA certificate (self-signed for test)
+	pathLen := uint8(0)
+	rootDER, err := IssueCertDER(rootPublic, rootSecret, &x509.Template{
+		Subject:   pkix.Name{CommonName: "Root"},
+		Issuer:    pkix.Name{CommonName: "Root"},
+		NotBefore: start,
+		NotAfter:  until,
+		Role:      x509.RoleAuthority(&pathLen),
+	})
+	if err != nil {
+		t.Fatalf("issuing root cert failed: %v", err)
+	}
+	rootCert, err := VerifyCertDER(rootDER, rootPublic, x509.ValidityNow())
+	if err != nil {
+		t.Fatalf("verifying root cert failed: %v", err)
+	}
+	// Issue a child leaf cert signed by root
+	childDER, err := IssueCertDER(childSecret.PublicKey(), rootSecret, &x509.Template{
+		Subject:   pkix.Name{CommonName: "Child"},
+		Issuer:    pkix.Name{CommonName: "Root"},
+		NotBefore: start,
+		NotAfter:  until,
+		Role:      x509.RoleLeaf(),
+	})
+	if err != nil {
+		t.Fatalf("issuing child cert failed: %v", err)
+	}
+	// Should succeed with correct issuer cert
+	if _, err = VerifyCertDERWithIssuer(childDER, rootCert, x509.ValidityNow()); err != nil {
+		t.Fatalf("chain verification should succeed: %v", err)
+	}
+}
+
+// TestCertTemplateValidation tests that invalid templates are rejected.
+func TestCertTemplateValidation(t *testing.T) {
+	aliceSecret := GenerateKey()
+	bobbySecret := GenerateKey()
+	alicePublic := aliceSecret.PublicKey()
+
+	start := time.Now().Truncate(time.Second)
+	until := start.Add(time.Hour)
+
+	// Empty subject
+	if _, err := IssueCertDER(alicePublic, bobbySecret, &x509.Template{
+		Subject:   pkix.Name{},
+		Issuer:    pkix.Name{CommonName: "Bobby"},
+		NotBefore: start,
+		NotAfter:  until,
+		Role:      x509.RoleLeaf(),
+	}); err == nil {
+		t.Error("expected error for empty subject")
+	}
+	// Empty issuer
+	if _, err := IssueCertDER(alicePublic, bobbySecret, &x509.Template{
+		Subject:   pkix.Name{CommonName: "Alice"},
+		Issuer:    pkix.Name{},
+		NotBefore: start,
+		NotAfter:  until,
+		Role:      x509.RoleLeaf(),
+	}); err == nil {
+		t.Error("expected error for empty issuer")
+	}
+	// Invalid validity window (not_before >= not_after)
+	if _, err := IssueCertDER(alicePublic, bobbySecret, &x509.Template{
+		Subject:   pkix.Name{CommonName: "Alice"},
+		Issuer:    pkix.Name{CommonName: "Bobby"},
+		NotBefore: until,
+		NotAfter:  start,
+		Role:      x509.RoleLeaf(),
+	}); err == nil {
+		t.Error("expected error for invalid validity window")
 	}
 }

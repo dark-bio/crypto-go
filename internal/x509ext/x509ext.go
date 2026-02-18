@@ -15,14 +15,16 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"math/big"
+	"strings"
 	"time"
 	"unsafe"
 
-	"github.com/dark-bio/crypto-go/x509"
+	cryptox509 "github.com/dark-bio/crypto-go/x509"
 )
 
 // XDSAOrXHPKEPublicKey defines the supported public key sizes. This allows us
-// to reuse
+// to reuse the same generic certificate creation logic for both xDSA (1984-byte)
+// and xHPKE/X-Wing (1216-byte) public keys.
 type XDSAOrXHPKEPublicKey interface {
 	~[1984]byte | ~[1216]byte
 }
@@ -83,7 +85,11 @@ type certificate struct {
 }
 
 // New creates an X.509 certificate for a subject, signed by the given signer.
-func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509.Params) ([]byte, error) {
+func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, template *cryptox509.Template) ([]byte, error) {
+	// Validate the template fields
+	if err := validateTemplate(template); err != nil {
+		return nil, err
+	}
 	// Generate a random serial number
 	serialBytes := make([]byte, 16)
 	if _, err := rand.Read(serialBytes); err != nil {
@@ -96,13 +102,12 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 	sigAlg := pkix.AlgorithmIdentifier{
 		Algorithm: oidXDSA,
 	}
-
 	// Build subject and issuer names using pkix.Name
-	issuerRDN, err := asn1.Marshal(params.IssuerName.ToRDNSequence())
+	issuerRDN, err := asn1.Marshal(template.Issuer.ToRDNSequence())
 	if err != nil {
 		panic("x509: " + err.Error())
 	}
-	subjectRDN, err := asn1.Marshal(params.SubjectName.ToRDNSequence())
+	subjectRDN, err := asn1.Marshal(template.Subject.ToRDNSequence())
 	if err != nil {
 		panic("x509: " + err.Error())
 	}
@@ -131,11 +136,41 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 	}
 	// Build extensions for the key identities and constraints
 	pk := signer.PublicKey()
+
+	isCA := template.Role.IsCA()
+	var pathLen *uint8
+	if v, ok := template.Role.PathLen(); ok {
+		pathLen = &v
+	}
 	extensions := []pkix.Extension{
-		makeBasicConstraintsExt(params.IsCA, params.PathLen),
-		makeKeyUsageExt(params.IsCA),
+		makeBasicConstraintsExt(isCA, pathLen),
+		makeKeyUsageExt(isCA, subjectOID),
 		makeSKIExt(subjectBytes),
 		makeAKIExt(pk[:]),
+	}
+	// Track extension OIDs for duplicate checking with custom extensions
+	extensionOIDs := map[string]bool{
+		"2.5.29.19": true, // basicConstraints
+		"2.5.29.15": true, // keyUsage
+		"2.5.29.14": true, // subjectKeyIdentifier
+		"2.5.29.35": true, // authorityKeyIdentifier
+	}
+	// Inject custom extensions
+	for _, ext := range template.Extensions {
+		oid := ext.OID.String()
+		if strings.HasPrefix(oid, "2.5.29.") {
+			return nil, cryptox509.ErrReservedExtensionOID
+		}
+		if extensionOIDs[oid] {
+			return nil, cryptox509.ErrDuplicateExtensionOID
+		}
+		extensionOIDs[oid] = true
+
+		extensions = append(extensions, pkix.Extension{
+			Id:       ext.OID,
+			Critical: ext.Critical,
+			Value:    ext.Value,
+		})
 	}
 	// Build the TBS certificate
 	tbs := tbsCertificate{
@@ -144,8 +179,8 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 		SignatureAlgorithm: sigAlg,
 		Issuer:             issuerName,
 		Validity: validity{
-			NotBefore: params.NotBefore.UTC(),
-			NotAfter:  params.NotAfter.UTC(),
+			NotBefore: template.NotBefore.UTC(),
+			NotAfter:  template.NotAfter.UTC(),
 		},
 		Subject:       subjectName,
 		PublicKeyInfo: spki,
@@ -174,6 +209,20 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, params *x509
 		panic("x509: " + err.Error())
 	}
 	return certDER, nil
+}
+
+// validateTemplate checks the template fields for obvious errors.
+func validateTemplate(t *cryptox509.Template) error {
+	if len(t.Subject.Names) == 0 && len(t.Subject.ExtraNames) == 0 && t.Subject.CommonName == "" {
+		return cryptox509.ErrEmptySubject
+	}
+	if len(t.Issuer.Names) == 0 && len(t.Issuer.ExtraNames) == 0 && t.Issuer.CommonName == "" {
+		return cryptox509.ErrEmptyIssuer
+	}
+	if !t.NotBefore.Before(t.NotAfter) {
+		return cryptox509.ErrInvalidValidity
+	}
+	return nil
 }
 
 // makeSKIExt creates a SubjectKeyIdentifier extension.
@@ -250,21 +299,21 @@ func makeBasicConstraintsExt(isCA bool, pathLen *uint8) pkix.Extension {
 
 // makeKeyUsageExt creates a KeyUsage extension.
 //
-// For CA certificates, sets keyCertSign (bit 5) and cRLSign (bit 6).
-// For end-entity certificates, sets digitalSignature (bit 0).
-func makeKeyUsageExt(isCA bool) pkix.Extension {
-	// KeyUsage ::= BIT STRING { Bit 0: digitalSignature, Bit 5: keyCertSign, Bit 6: cRLSign }
+// For CA certificates, sets keyCertSign and cRLSign.
+// For end-entity certificates:
+//   - xDSA subjects use digitalSignature
+//   - xHPKE subjects use keyAgreement
+func makeKeyUsageExt(isCA bool, subjectOID asn1.ObjectIdentifier) pkix.Extension {
 	var usage asn1.BitString
 	if isCA {
-		usage = asn1.BitString{Bytes: []byte{0b0000_0110}, BitLength: 7} // keyCertSign (bit 5) + cRLSign (bit 6), 1 unused bit
+		usage = asn1.BitString{Bytes: []byte{0b0000_0110}, BitLength: 7} // keyCertSign (bit 5) + cRLSign (bit 6)
+	} else if subjectOID.Equal(oidXWing) {
+		usage = asn1.BitString{Bytes: []byte{0b0000_1000}, BitLength: 5} // keyAgreement (bit 4)
 	} else {
-		usage = asn1.BitString{Bytes: []byte{0b1000_0000}, BitLength: 1} // digitalSignature (bit 0), 7 unused bits
+		usage = asn1.BitString{Bytes: []byte{0b1000_0000}, BitLength: 1} // digitalSignature (bit 0)
 	}
+
 	value, _ := asn1.Marshal(usage)
 
-	return pkix.Extension{
-		Id:       asn1.ObjectIdentifier{2, 5, 29, 15}, // id-ce-keyUsage
-		Critical: true,
-		Value:    value,
-	}
+	return pkix.Extension{Id: asn1.ObjectIdentifier{2, 5, 29, 15}, Critical: true, Value: value}
 }

@@ -17,7 +17,7 @@ import (
 	"github.com/dark-bio/crypto-go/xdsa"
 )
 
-// xdsaSigner implements x509.Signer through an XDSA secret key.
+// xdsaSigner implements x509ext.Signer through an XDSA secret key.
 type xdsaSigner struct {
 	signer xdsa.Signer
 }
@@ -37,108 +37,162 @@ func (s *xdsaSigner) PublicKey() *[xdsa.PublicKeySize]byte {
 	return &pub
 }
 
-// MarshalCertDER generates a DER-encoded X.509 certificate for this public key,
-// signed by an xDSA issuer.
+// IssueCertDER generates a DER-encoded X.509 certificate for the subject public
+// key, signed by an xDSA issuer.
 //
-// Note: HPKE certificates are always end-entity certificates. The IsCA
-// and PathLen fields in params are ignored and set to false/nil.
-func (k *PublicKey) MarshalCertDER(signer xdsa.Signer, params *x509.Params) ([]byte, error) {
-	// Force end-entity parameters
-	eeParams := &x509.Params{
-		SubjectName: params.SubjectName,
-		IssuerName:  params.IssuerName,
-		NotBefore:   params.NotBefore,
-		NotAfter:    params.NotAfter,
-		IsCA:        false,
-		PathLen:     nil,
+// xHPKE certificates are always end-entity certificates. If the template asks
+// for a CA role, ErrMustBeLeaf is returned.
+func IssueCertDER(subject *PublicKey, issuer xdsa.Signer, template *x509.Template) ([]byte, error) {
+	if template.Role.IsCA() {
+		return nil, x509.ErrMustBeLeaf
 	}
-	return x509ext.New[[PublicKeySize]byte](k, &xdsaSigner{signer}, eeParams)
+	return x509ext.New[[PublicKeySize]byte](subject, &xdsaSigner{issuer}, template)
 }
 
-// MarshalCertPEM generates a PEM-encoded X.509 certificate for this public key,
-// signed by an xDSA issuer.
+// IssueCertPEM generates a PEM-encoded X.509 certificate for the subject public
+// key, signed by an xDSA issuer.
 //
-// Note: HPKE certificates are always end-entity certificates. The IsCA
-// and PathLen fields in params are ignored and set to false/nil.
-func (k *PublicKey) MarshalCertPEM(signer xdsa.Signer, params *x509.Params) (string, error) {
-	der, err := k.MarshalCertDER(signer, params)
+// xHPKE certificates are always end-entity certificates. If the template asks
+// for a CA role, ErrMustBeLeaf is returned.
+func IssueCertPEM(subject *PublicKey, issuer xdsa.Signer, template *x509.Template) (string, error) {
+	der, err := IssueCertDER(subject, issuer, template)
 	if err != nil {
 		return "", err
 	}
 	return string(pem.Encode("CERTIFICATE", der)), nil
 }
 
-// ParseCertDER parses a public key from a DER-encoded X.509 certificate,
-// verifying the signature against the provided xDSA signer's public key.
-// Returns the public key and validity period.
-func ParseCertDER(der []byte, signer *xdsa.PublicKey) (*PublicKey, *stdx509.Certificate, error) {
+// VerifyCertDER parses and verifies a DER-encoded X.509 certificate against the
+// xDSA issuer's public key, checking signature validity and optionally time
+// validity.
+func VerifyCertDER(der []byte, issuer *xdsa.PublicKey, validity x509.ValidityCheck) (*x509.Verified[*PublicKey], error) {
 	// Parse the certificate
 	cert, err := stdx509.ParseCertificate(der)
 	if err != nil {
-		return nil, nil, errors.New("xhpke: " + err.Error())
+		return nil, errors.New("xhpke: " + err.Error())
 	}
-	// Validate the content against the provided signer (composite signature)
+	// Validate the content against the provided signer
 	if len(cert.Signature) != xdsa.SignatureSize {
-		return nil, nil, errors.New("xhpke: invalid signature length")
+		return nil, errors.New("xhpke: invalid signature length")
 	}
 	var sig xdsa.Signature
 	copy(sig[:], cert.Signature)
 
-	if err := signer.Verify(cert.RawTBSCertificate, &sig); err != nil {
-		return nil, nil, err
+	if err := issuer.Verify(cert.RawTBSCertificate, &sig); err != nil {
+		return nil, err
+	}
+	// Check time validity if requested
+	if t, ok := validity.Timestamp(); ok {
+		if t.Before(cert.NotBefore) || t.After(cert.NotAfter) {
+			return nil, x509.ErrExpiredCertificate
+		}
+	}
+	// Enforce key usage profile (check required bits are set)
+	if cert.KeyUsage&stdx509.KeyUsageKeyAgreement == 0 {
+		return nil, x509.ErrInvalidKeyUsage
+	}
+	if cert.IsCA {
+		return nil, x509.ErrMustBeLeaf
 	}
 	// Extract the embedded public key
 	spki, err := asn1ext.ParseSubjectPublicKeyInfo(cert.RawSubjectPublicKeyInfo)
 	if err != nil {
-		return nil, nil, errors.New("xhpke: " + err.Error())
+		return nil, errors.New("xhpke: " + err.Error())
 	}
 	if spki.SubjectPublicKey.BitLength%8 != 0 {
-		return nil, nil, errors.New("xhpke: invalid public key bit string")
+		return nil, errors.New("xhpke: invalid public key bit string")
 	}
 	if len(spki.SubjectPublicKey.Bytes) != PublicKeySize {
-		return nil, nil, errors.New("xhpke: invalid public key length in certificate")
+		return nil, errors.New("xhpke: invalid public key length in certificate")
 	}
 	var blob [PublicKeySize]byte
 	copy(blob[:], spki.SubjectPublicKey.Bytes)
 
 	key, err := ParsePublicKey(blob)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	// Extract the validity period
-	return key, cert, nil
+	return &x509.Verified[*PublicKey]{
+		PublicKey:   key,
+		Certificate: cert,
+	}, nil
 }
 
-// MustParseCertDER parses a public key from a DER-encoded X.509 certificate.
-// It panics if the parsing or verification fails.
-func MustParseCertDER(der []byte, signer *xdsa.PublicKey) (*PublicKey, *stdx509.Certificate) {
-	key, cert, err := ParseCertDER(der, signer)
-	if err != nil {
-		panic("xhpke: " + err.Error())
-	}
-	return key, cert
-}
-
-// ParseCertPEM parses a public key from a PEM-encoded X.509 certificate,
-// verifying the signature against the provided xDSA signer's public key.
-// Returns the public key and validity period.
-func ParseCertPEM(s string, signer *xdsa.PublicKey) (*PublicKey, *stdx509.Certificate, error) {
+// VerifyCertPEM parses and verifies a PEM-encoded X.509 certificate against the
+// xDSA issuer's public key.
+func VerifyCertPEM(s string, issuer *xdsa.PublicKey, validity x509.ValidityCheck) (*x509.Verified[*PublicKey], error) {
 	kind, blob, err := pem.Decode([]byte(s))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if kind != "CERTIFICATE" {
-		return nil, nil, errors.New("xhpke: invalid PEM type: " + kind)
+		return nil, errors.New("xhpke: invalid PEM type: " + kind)
 	}
-	return ParseCertDER(blob, signer)
+	return VerifyCertDER(blob, issuer, validity)
 }
 
-// MustParseCertPEM parses a public key from a PEM-encoded X.509 certificate.
-// It panics if the parsing or verification fails.
-func MustParseCertPEM(s string, signer *xdsa.PublicKey) (*PublicKey, *stdx509.Certificate) {
-	key, params, err := ParseCertPEM(s, signer)
+// VerifyCertDERWithIssuer parses and verifies a DER-encoded X.509 certificate
+// using a previously verified xDSA issuer certificate. In addition to signature
+// and time checks, it enforces CA role, key usage, path length, and DN chaining
+// constraints on the issuer.
+func VerifyCertDERWithIssuer(der []byte, issuerCert *x509.Verified[*xdsa.PublicKey], validity x509.ValidityCheck) (*x509.Verified[*PublicKey], error) {
+	cert, err := VerifyCertDER(der, issuerCert.PublicKey, validity)
+	if err != nil {
+		return nil, err
+	}
+	if err := enforceIssuerChaining(cert.Certificate, issuerCert.Certificate); err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
+// VerifyCertPEMWithIssuer parses and verifies a PEM-encoded X.509 certificate
+// using a previously verified xDSA issuer certificate. In addition to signature
+// and time checks, it enforces CA role, key usage, path length, and DN chaining
+// constraints on the issuer.
+func VerifyCertPEMWithIssuer(s string, issuerCert *x509.Verified[*xdsa.PublicKey], validity x509.ValidityCheck) (*x509.Verified[*PublicKey], error) {
+	cert, err := VerifyCertPEM(s, issuerCert.PublicKey, validity)
+	if err != nil {
+		return nil, err
+	}
+	if err := enforceIssuerChaining(cert.Certificate, issuerCert.Certificate); err != nil {
+		return nil, err
+	}
+	return cert, nil
+}
+
+// MustVerifyCertDER is like VerifyCertDER but panics on error.
+func MustVerifyCertDER(der []byte, issuer *xdsa.PublicKey, validity x509.ValidityCheck) *x509.Verified[*PublicKey] {
+	cert, err := VerifyCertDER(der, issuer, validity)
 	if err != nil {
 		panic("xhpke: " + err.Error())
 	}
-	return key, params
+	return cert
+}
+
+// MustVerifyCertPEM is like VerifyCertPEM but panics on error.
+func MustVerifyCertPEM(s string, issuer *xdsa.PublicKey, validity x509.ValidityCheck) *x509.Verified[*PublicKey] {
+	cert, err := VerifyCertPEM(s, issuer, validity)
+	if err != nil {
+		panic("xhpke: " + err.Error())
+	}
+	return cert
+}
+
+// enforceIssuerChaining validates that the issuer certificate is authorized to
+// sign the child certificate (CA role, key usage, DN chaining).
+func enforceIssuerChaining(child *stdx509.Certificate, issuer *stdx509.Certificate) error {
+	// Issuer must be a CA
+	if !issuer.IsCA {
+		return x509.ErrIssuerNotCA
+	}
+	// Issuer must have keyCertSign|cRLSign set
+	if issuer.KeyUsage&(stdx509.KeyUsageCertSign|stdx509.KeyUsageCRLSign) != stdx509.KeyUsageCertSign|stdx509.KeyUsageCRLSign {
+		return x509.ErrIssuerKeyUsage
+	}
+	// Child's issuer DN must match issuer's subject DN
+	if child.Issuer.String() != issuer.Subject.String() {
+		return x509.ErrIssuerDNMismatch
+	}
+	return nil
 }
