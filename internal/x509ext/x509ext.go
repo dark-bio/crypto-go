@@ -91,12 +91,17 @@ func New[T XDSAOrXHPKEPublicKey](subject Subject[T], signer Signer, template *cr
 		return nil, err
 	}
 	// Generate a random serial number
-	serial := makeSerial()
+	serialBytes := make([]byte, 16)
+	if _, err := rand.Read(serialBytes); err != nil {
+		panic("x509: " + err.Error())
+	}
+	serialBytes[0] &= 0x7F // Ensure positive (MSB = 0)
+	serial := new(big.Int).SetBytes(serialBytes)
+
 	// Create the signature algorithm identifier (always xDSA)
 	sigAlg := pkix.AlgorithmIdentifier{
 		Algorithm: oidXDSA,
 	}
-
 	// Build subject and issuer names using pkix.Name
 	issuerRDN, err := asn1.Marshal(template.Issuer.ToRDNSequence())
 	if err != nil {
@@ -218,17 +223,6 @@ func validateTemplate(t *cryptox509.Template) error {
 		return cryptox509.ErrInvalidValidity
 	}
 	return nil
-}
-
-// makeSerial generates a random 128-bit serial number.
-func makeSerial() *big.Int {
-	serialBytes := make([]byte, 16)
-	if _, err := rand.Read(serialBytes); err != nil {
-		panic("x509: " + err.Error())
-	}
-	serialBytes[0] &= 0x7F // Ensure positive (MSB = 0)
-	serialBytes[0] |= 0x01 // Ensure non-zero
-	return new(big.Int).SetBytes(serialBytes)
 }
 
 // makeSKIExt creates a SubjectKeyIdentifier extension.
