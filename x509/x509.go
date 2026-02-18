@@ -124,7 +124,7 @@ var (
 	ErrInvalidKeyUsage       = errors.New("x509: key usage does not match certificate role")
 	ErrExpiredCertificate    = errors.New("x509: certificate is not valid at the requested time")
 	ErrIssuerNotCA           = errors.New("x509: issuer certificate is not a CA")
-	ErrIssuerKeyUsage        = errors.New("x509: issuer does not have exactly keyCertSign|cRLSign")
+	ErrIssuerKeyUsage        = errors.New("x509: issuer does not have keyCertSign|cRLSign set")
 	ErrIssuerPathLen         = errors.New("x509: issuer pathLenConstraint forbids CA children")
 	ErrIssuerDNMismatch      = errors.New("x509: child issuer DN does not match issuer subject DN")
 )

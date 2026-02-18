@@ -87,8 +87,8 @@ func VerifyCertDER(der []byte, issuer *xdsa.PublicKey, validity x509.ValidityChe
 			return nil, x509.ErrExpiredCertificate
 		}
 	}
-	// Enforce strict key usage profile based on certificate role
-	if cert.KeyUsage != stdx509.KeyUsageKeyAgreement {
+	// Enforce key usage profile (check required bits are set)
+	if cert.KeyUsage&stdx509.KeyUsageKeyAgreement == 0 {
 		return nil, x509.ErrInvalidKeyUsage
 	}
 	if cert.IsCA {
@@ -186,8 +186,8 @@ func enforceIssuerChaining(child *stdx509.Certificate, issuer *stdx509.Certifica
 	if !issuer.IsCA {
 		return x509.ErrIssuerNotCA
 	}
-	// Issuer must have exactly keyCertSign|cRLSign
-	if issuer.KeyUsage != stdx509.KeyUsageCertSign|stdx509.KeyUsageCRLSign {
+	// Issuer must have keyCertSign|cRLSign set
+	if issuer.KeyUsage&(stdx509.KeyUsageCertSign|stdx509.KeyUsageCRLSign) != stdx509.KeyUsageCertSign|stdx509.KeyUsageCRLSign {
 		return x509.ErrIssuerKeyUsage
 	}
 	// Child's issuer DN must match issuer's subject DN

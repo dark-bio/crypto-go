@@ -76,13 +76,13 @@ func VerifyCertDER(der []byte, issuer *PublicKey, validity x509.ValidityCheck) (
 			return nil, x509.ErrExpiredCertificate
 		}
 	}
-	// Enforce strict key usage profile based on certificate role
+	// Enforce key usage profile based on certificate role (check required bits are set)
 	if cert.IsCA {
-		if cert.KeyUsage != stdx509.KeyUsageCertSign|stdx509.KeyUsageCRLSign {
+		if cert.KeyUsage&(stdx509.KeyUsageCertSign|stdx509.KeyUsageCRLSign) != stdx509.KeyUsageCertSign|stdx509.KeyUsageCRLSign {
 			return nil, x509.ErrInvalidKeyUsage
 		}
 	} else {
-		if cert.KeyUsage != stdx509.KeyUsageDigitalSignature {
+		if cert.KeyUsage&stdx509.KeyUsageDigitalSignature == 0 {
 			return nil, x509.ErrInvalidKeyUsage
 		}
 	}
@@ -178,8 +178,8 @@ func enforceIssuerChaining(child *stdx509.Certificate, issuer *stdx509.Certifica
 	if !issuer.IsCA {
 		return x509.ErrIssuerNotCA
 	}
-	// Issuer must have exactly keyCertSign|cRLSign
-	if issuer.KeyUsage != stdx509.KeyUsageCertSign|stdx509.KeyUsageCRLSign {
+	// Issuer must have keyCertSign|cRLSign set
+	if issuer.KeyUsage&(stdx509.KeyUsageCertSign|stdx509.KeyUsageCRLSign) != stdx509.KeyUsageCertSign|stdx509.KeyUsageCRLSign {
 		return x509.ErrIssuerKeyUsage
 	}
 	// If issuer has pathLen constraint and child is also a CA, check depth
