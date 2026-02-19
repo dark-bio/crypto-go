@@ -4,21 +4,56 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package cbor implements a tiny CBOR encoder and decoder.
+// Package cbor implements a tiny, security-focused CBOR encoder/decoder.
 //
 // https://datatracker.ietf.org/doc/html/rfc8949
 //
-// This is an implementation of the CBOR spec with an extremely reduced type
-// system, focusing on security rather than flexibility or completeness. The
-// following types are supported:
-//   - Booleans:                bool
-//   - Null:                    arrays with cbor:"optional" tag, cbor.Null, cbor.Option
-//   - 64bit positive integers: uint64
-//   - 64bit signed integers:   int64
-//   - UTF-8 text strings:      string
-//   - Byte strings:            []byte, [N]byte
-//   - Arrays:                  structs with cbor:"_,array" tag
-//   - Maps:                    structs with cbor:"N,key" tags (integer keys only), cbor:"optional" == omitempty
+// # Type system
+//
+// Only a minimal subset of CBOR is supported:
+//
+//   - Booleans:     bool
+//   - Integers:     uint64, int64
+//   - Text:         string
+//   - Bytes:        []byte, [N]byte
+//   - Null:         cbor.Null, cbor.Option[T]{Some: false}
+//   - Arrays:       structs tagged cbor:"_,array" (fields encoded in declaration order)
+//   - Maps:         structs with cbor:"N,key" fields (integer keys, deterministic order)
+//   - Raw:          cbor.Raw (opaque CBOR bytes, passed through without parsing)
+//
+// # Struct tags
+//
+// Array mode — fields encode positionally:
+//
+//	type Foo struct {
+//	    _ struct{} `cbor:"_,array"`
+//	    A uint64
+//	    B string
+//	}
+//
+// Map mode — fields encode as key-value pairs sorted by CBOR key bytes:
+//
+//	type Bar struct {
+//	    X uint64          `cbor:"1,key"`            // required
+//	    Y []byte          `cbor:"2,key,optional"`   // omitted when nil
+//	    Z Option[uint64]  `cbor:"3,key"`            // nullable: always present, value or null
+//	}
+//
+// # Embedding
+//
+// Anonymous struct fields are flattened into the parent map. The embedded struct
+// must itself be map-mode. Keys across all embeds and direct fields must not overlap.
+//
+//	type Token struct {
+//	    Identity              // flattened: keys from Identity merge into Token
+//	    Aud string `cbor:"3,key"`
+//	}
+//
+// # Encoding rules
+//
+// All output is deterministic (RFC 8949 Section 4.2.1): canonical shortest-form integers,
+// map keys sorted by encoded bytes, no indefinite lengths, no floats, no tags.
+// Decoders reject non-canonical input, duplicate keys, and out-of-order keys.
 package cbor
 
 import (
