@@ -435,7 +435,10 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 				if nextKey == mf.key {
 					dec.DecodeInt() // consume the peeked key
 					remaining--
-					if err := decodeValue(dec, v.FieldByIndex(mf.field.Index), mf.optional); err != nil {
+					// Key is present, so the value must be real (not null).
+					// Optional only controls whether the key can be omitted
+					// from the map, not whether its value can be null.
+					if err := decodeValue(dec, v.FieldByIndex(mf.field.Index), false); err != nil {
 						return err
 					}
 					continue

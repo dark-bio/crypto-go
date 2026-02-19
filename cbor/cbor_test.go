@@ -534,6 +534,91 @@ func TestArrayRejection(t *testing.T) {
 	}
 }
 
+// Tests that array structs with optional and Option fields encode/decode correctly.
+func TestArrayOptionalEncoding(t *testing.T) {
+	type TestArrayOptional struct {
+		_           struct{}       `cbor:"_,array"`
+		Required    uint64
+		OptBytes    []byte         `cbor:"_,optional"`
+		Nullable    Option[uint64]
+		OptNullable Option[uint64] `cbor:"_,optional"`
+	}
+
+	// All fields present with values
+	arr := TestArrayOptional{
+		Required:    42,
+		OptBytes:    []byte{0xab},
+		Nullable:    MakeSome(uint64(10)),
+		OptNullable: MakeSome(uint64(20)),
+	}
+	data, err := Marshal(arr)
+	if err != nil {
+		t.Fatalf("Marshal all present: %v", err)
+	}
+	if data[0] != 0x84 { // array with 4 elements
+		t.Errorf("all present: got header %x, want 0x84", data[0])
+	}
+	var decoded TestArrayOptional
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal all present: %v", err)
+	}
+	if decoded.Required != 42 || !bytes.Equal(decoded.OptBytes, []byte{0xab}) ||
+		!decoded.Nullable.Some || decoded.Nullable.Value != 10 ||
+		!decoded.OptNullable.Some || decoded.OptNullable.Value != 20 {
+		t.Errorf("all present roundtrip failed: %+v", decoded)
+	}
+
+	// Optional fields as nil/None (should encode as null, not be omitted)
+	arr = TestArrayOptional{
+		Required: 7,
+		Nullable: MakeSome(uint64(99)),
+	}
+	data, err = Marshal(arr)
+	if err != nil {
+		t.Fatalf("Marshal optionals nil: %v", err)
+	}
+	if data[0] != 0x84 { // still array with 4 elements
+		t.Errorf("optionals nil: got header %x, want 0x84", data[0])
+	}
+	decoded = TestArrayOptional{}
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal optionals nil: %v", err)
+	}
+	if decoded.Required != 7 || decoded.OptBytes != nil ||
+		!decoded.Nullable.Some || decoded.Nullable.Value != 99 ||
+		decoded.OptNullable.Some {
+		t.Errorf("optionals nil roundtrip failed: %+v", decoded)
+	}
+
+	// All Option fields as None
+	arr = TestArrayOptional{Required: 1}
+	data, err = Marshal(arr)
+	if err != nil {
+		t.Fatalf("Marshal all none: %v", err)
+	}
+	if data[0] != 0x84 { // still array with 4 elements
+		t.Errorf("all none: got header %x, want 0x84", data[0])
+	}
+	decoded = TestArrayOptional{}
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal all none: %v", err)
+	}
+	if decoded.Required != 1 || decoded.OptBytes != nil ||
+		decoded.Nullable.Some || decoded.OptNullable.Some {
+		t.Errorf("all none roundtrip failed: %+v", decoded)
+	}
+
+	// Non-optional []byte as nil should fail
+	type TestArrayNonOptBytes struct {
+		_    struct{} `cbor:"_,array"`
+		Data []byte
+	}
+	_, err = Marshal(TestArrayNonOptBytes{})
+	if !errors.Is(err, ErrUnexpectedNil) {
+		t.Errorf("non-optional nil []byte: got %v, want ErrUnexpectedNil", err)
+	}
+}
+
 // Tests that maps encode correctly with deterministic key ordering.
 func TestMapEncoding(t *testing.T) {
 	// Map with positive and negative keys (should be sorted by bytewise order)
@@ -1132,6 +1217,44 @@ func TestMapOptionalRejection(t *testing.T) {
 	}, &testMapOptional{})
 	if err == nil {
 		t.Error("missing required field should fail")
+	}
+
+	// Optional *string field present but with null value (should fail:
+	// optional means omitempty, not nullable)
+	err = Unmarshal([]byte{
+		0xa3,       // map with 3 entries
+		0x01, 0x00, // 1: 0
+		0x02, 0xf6, // 2: null (optional *string, but key is present)
+		0x03, 0xf6, // 3: null
+	}, &testMapOptional{})
+	if !errors.Is(err, ErrUnexpectedNull) {
+		t.Errorf("optional field with null value: got %v, want ErrUnexpectedNull", err)
+	}
+
+	// Optional []byte field present but with null value (should fail)
+	err = Unmarshal([]byte{
+		0xa3,       // map with 3 entries
+		0x01, 0x00, // 1: 0
+		0x03, 0xf6, // 3: null
+		0x20, 0xf6, // -1: null (optional []byte, but key is present)
+	}, &testMapOptional{})
+	if !errors.Is(err, ErrUnexpectedNull) {
+		t.Errorf("optional []byte with null value: got %v, want ErrUnexpectedNull", err)
+	}
+
+	// Optional Option[uint64] present with null is fine (Option handles null natively)
+	var validDecoded testMapOptional
+	err = Unmarshal([]byte{
+		0xa3,       // map with 3 entries
+		0x01, 0x00, // 1: 0
+		0x03, 0xf6, // 3: null
+		0x04, 0xf6, // 4: null (optional Option[uint64], null = None)
+	}, &validDecoded)
+	if err != nil {
+		t.Errorf("optional Option[uint64] with null should succeed: %v", err)
+	}
+	if validDecoded.OptionalU64.Some {
+		t.Error("optional Option[uint64] with null should decode as None")
 	}
 }
 
