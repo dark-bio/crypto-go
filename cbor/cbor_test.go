@@ -1334,7 +1334,7 @@ func TestMapEmbedMultiple(t *testing.T) {
 	original := Token{
 		Identity: Identity{Iss: "dark-bio", Sub: "device-1"},
 		Temporal: Temporal{Exp: 2000, Nbf: 1000},
-		Aud:      "api.dark-bio.com",
+		Aud:      "api.dark.bio",
 	}
 	data, err := Marshal(original)
 	if err != nil {
@@ -1348,7 +1348,7 @@ func TestMapEmbedMultiple(t *testing.T) {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
 	if decoded.Iss != "dark-bio" || decoded.Sub != "device-1" ||
-		decoded.Aud != "api.dark-bio.com" || decoded.Exp != 2000 || decoded.Nbf != 1000 {
+		decoded.Aud != "api.dark.bio" || decoded.Exp != 2000 || decoded.Nbf != 1000 {
 		t.Errorf("roundtrip failed: got %+v", decoded)
 	}
 }
