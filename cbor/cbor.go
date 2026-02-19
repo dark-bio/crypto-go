@@ -12,13 +12,13 @@
 // system, focusing on security rather than flexibility or completeness. The
 // following types are supported:
 //   - Booleans:                bool
-//   - Null:                    structs with cbor:"optional" tag, cbor.Null, cbor.Option
+//   - Null:                    arrays with cbor:"optional" tag, cbor.Null, cbor.Option
 //   - 64bit positive integers: uint64
 //   - 64bit signed integers:   int64
 //   - UTF-8 text strings:      string
 //   - Byte strings:            []byte, [N]byte
 //   - Arrays:                  structs with cbor:"_,array" tag
-//   - Maps:                    structs with cbor:"N,key" tags (integer keys only)
+//   - Maps:                    structs with cbor:"N,key" tags (integer keys only), cbor:"optional" == omitempty
 package cbor
 
 import (
@@ -352,6 +352,14 @@ func (d *Decoder) DecodeNull() error {
 // PeekNull checks if the next value is null without consuming it.
 func (d *Decoder) PeekNull() bool {
 	return d.pos < len(d.data) && d.data[d.pos] == majorSimple<<5|simpleNull
+}
+
+// PeekInt returns the next signed integer value without consuming it.
+func (d *Decoder) PeekInt() (int64, error) {
+	saved := d.pos
+	val, err := d.DecodeInt()
+	d.pos = saved
+	return val, err
 }
 
 // decodeHeader extracts the major type and the integer value embedded as additional info.
