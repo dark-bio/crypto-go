@@ -1242,19 +1242,16 @@ func TestMapOptionalRejection(t *testing.T) {
 		t.Errorf("optional []byte with null value: got %v, want ErrUnexpectedNull", err)
 	}
 
-	// Optional Option[uint64] present with null is fine (Option handles null natively)
-	var validDecoded testMapOptional
+	// Optional Option[uint64] present but with null value (should fail:
+	// optional means the key can be omitted, not that null is valid)
 	err = Unmarshal([]byte{
 		0xa3,       // map with 3 entries
 		0x01, 0x00, // 1: 0
 		0x03, 0xf6, // 3: null
-		0x04, 0xf6, // 4: null (optional Option[uint64], null = None)
-	}, &validDecoded)
-	if err != nil {
-		t.Errorf("optional Option[uint64] with null should succeed: %v", err)
-	}
-	if validDecoded.OptionalU64.Some {
-		t.Error("optional Option[uint64] with null should decode as None")
+		0x04, 0xf6, // 4: null (optional Option[uint64], but key is present)
+	}, &testMapOptional{})
+	if !errors.Is(err, ErrUnexpectedNull) {
+		t.Errorf("optional Option[uint64] with null value: got %v, want ErrUnexpectedNull", err)
 	}
 }
 
