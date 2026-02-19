@@ -1276,6 +1276,432 @@ func TestMapOptionalRejection(t *testing.T) {
 	}
 }
 
+// Tests that embedded struct fields produce identical CBOR to a flat struct
+// with the same fields and keys.
+func TestMapEmbedFlat(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+	}
+	type Embedded struct {
+		Inner
+		C uint64 `cbor:"3,key"`
+	}
+	type Flat struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+		C uint64 `cbor:"3,key"`
+	}
+	embedded := Embedded{Inner: Inner{A: 1, B: "two"}, C: 3}
+	flat := Flat{A: 1, B: "two", C: 3}
+
+	embData, err := Marshal(embedded)
+	if err != nil {
+		t.Fatalf("Marshal embedded: %v", err)
+	}
+	flatData, err := Marshal(flat)
+	if err != nil {
+		t.Fatalf("Marshal flat: %v", err)
+	}
+	if !bytes.Equal(embData, flatData) {
+		t.Errorf("embedded %x != flat %x", embData, flatData)
+	}
+	// Decode embedded bytes back into the embedded type
+	var decoded Embedded
+	if err := Unmarshal(embData, &decoded); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if decoded.A != 1 || decoded.B != "two" || decoded.C != 3 {
+		t.Errorf("roundtrip failed: got %+v", decoded)
+	}
+}
+
+// Tests that multiple embedded structs merge into a single flat map.
+func TestMapEmbedMultiple(t *testing.T) {
+	type Identity struct {
+		Iss string `cbor:"1,key"`
+		Sub string `cbor:"2,key"`
+	}
+	type Temporal struct {
+		Exp uint64 `cbor:"4,key"`
+		Nbf uint64 `cbor:"5,key"`
+	}
+	type Token struct {
+		Identity
+		Temporal
+		Aud string `cbor:"3,key"`
+	}
+	original := Token{
+		Identity: Identity{Iss: "dark-bio", Sub: "device-1"},
+		Temporal: Temporal{Exp: 2000, Nbf: 1000},
+		Aud:      "api.dark.bio",
+	}
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if data[0] != 0xa5 { // map with 5 entries
+		t.Errorf("expected map header 0xa5, got %x", data[0])
+	}
+	var decoded Token
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if decoded.Iss != "dark-bio" || decoded.Sub != "device-1" ||
+		decoded.Aud != "api.dark.bio" || decoded.Exp != 2000 || decoded.Nbf != 1000 {
+		t.Errorf("roundtrip failed: got %+v", decoded)
+	}
+}
+
+// Tests that deeply nested embedding (A embeds B embeds C) works correctly.
+func TestMapEmbedNested(t *testing.T) {
+	type A struct {
+		X uint64 `cbor:"1,key"`
+	}
+	type B struct {
+		A
+		Y uint64 `cbor:"2,key"`
+	}
+	type C struct {
+		B
+		Z uint64 `cbor:"3,key"`
+	}
+	original := C{B: B{A: A{X: 10}, Y: 20}, Z: 30}
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if data[0] != 0xa3 { // map with 3 entries
+		t.Errorf("expected map header 0xa3, got %x", data[0])
+	}
+	var decoded C
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if decoded.X != 10 || decoded.Y != 20 || decoded.Z != 30 {
+		t.Errorf("roundtrip failed: got %+v", decoded)
+	}
+}
+
+// Tests that anonymous embedded pointers are flattened like value embeds.
+func TestMapEmbedPointer(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+	}
+	type Embedded struct {
+		*Inner
+		C uint64 `cbor:"3,key"`
+	}
+	original := Embedded{Inner: &Inner{A: 1, B: "two"}, C: 3}
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if data[0] != 0xa3 {
+		t.Errorf("expected map header 0xa3, got %x", data[0])
+	}
+
+	var decoded Embedded
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if decoded.Inner == nil || decoded.A != 1 || decoded.B != "two" || decoded.C != 3 {
+		t.Errorf("roundtrip failed: got %+v", decoded)
+	}
+
+	// Nil embedded pointer should fail: embed fields are required schema.
+	_, err = Marshal(Embedded{C: 3})
+	if !errors.Is(err, ErrUnexpectedNil) {
+		t.Errorf("nil embedded pointer marshal: got %v, want ErrUnexpectedNil", err)
+	}
+}
+
+// Tests that anonymous embedded fields with a cbor tag but without key marker
+// are rejected instead of silently ignored.
+func TestMapEmbedAnonymousTaggedRejected(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+	}
+	type Bad struct {
+		Inner `cbor:",optional"`
+		B     uint64 `cbor:"2,key"`
+	}
+	_, err := Marshal(Bad{Inner: Inner{A: 1}, B: 2})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("tagged anonymous embed marshal: got %v, want ErrUnsupportedType", err)
+	}
+	err = Unmarshal([]byte{0xa2, 0x01, 0x01, 0x02, 0x02}, &Bad{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("tagged anonymous embed unmarshal: got %v, want ErrUnsupportedType", err)
+	}
+}
+
+// Tests that embedding an array-mode struct into a map-mode struct is rejected
+// rather than silently contributing no keys.
+func TestMapEmbedArrayModeRejected(t *testing.T) {
+	type InnerArray struct {
+		_ struct{} `cbor:"_,array"`
+		A uint64
+	}
+	type OuterMap struct {
+		InnerArray
+		B uint64 `cbor:"1,key"`
+	}
+	_, err := Marshal(OuterMap{InnerArray: InnerArray{A: 7}, B: 1})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("array-mode embed marshal: got %v, want ErrUnsupportedType", err)
+	}
+	err = Unmarshal([]byte{0xa1, 0x01, 0x01}, &OuterMap{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("array-mode embed unmarshal: got %v, want ErrUnsupportedType", err)
+	}
+}
+
+// Tests that optional fields inside embedded structs work correctly.
+func TestMapEmbedOptional(t *testing.T) {
+	type Base struct {
+		ID    uint64 `cbor:"1,key"`
+		Extra []byte `cbor:"2,key,optional"`
+	}
+	type Extended struct {
+		Base
+		Name string `cbor:"3,key"`
+	}
+	// With optional present
+	original := Extended{Base: Base{ID: 42, Extra: []byte{0xab}}, Name: "test"}
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal with optional: %v", err)
+	}
+	if data[0] != 0xa3 { // map with 3 entries
+		t.Errorf("with optional: expected map header 0xa3, got %x", data[0])
+	}
+	var decoded Extended
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal with optional: %v", err)
+	}
+	if decoded.ID != 42 || !bytes.Equal(decoded.Extra, []byte{0xab}) || decoded.Name != "test" {
+		t.Errorf("with optional roundtrip failed: %+v", decoded)
+	}
+
+	// Without optional (nil Extra omitted from map)
+	original = Extended{Base: Base{ID: 42}, Name: "test"}
+	data, err = Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal without optional: %v", err)
+	}
+	if data[0] != 0xa2 { // map with 2 entries
+		t.Errorf("without optional: expected map header 0xa2, got %x", data[0])
+	}
+	decoded = Extended{}
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal without optional: %v", err)
+	}
+	if decoded.ID != 42 || decoded.Extra != nil || decoded.Name != "test" {
+		t.Errorf("without optional roundtrip failed: %+v", decoded)
+	}
+}
+
+// Tests that duplicate CBOR keys across embedded structs are detected.
+func TestMapEmbedDuplicateKey(t *testing.T) {
+	type A struct {
+		X uint64 `cbor:"1,key"`
+	}
+	type B struct {
+		Y uint64 `cbor:"1,key"` // same key as A.X
+	}
+	type Bad struct {
+		A
+		B
+	}
+	_, err := Marshal(Bad{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("duplicate key marshal: got %v, want ErrUnsupportedType", err)
+	}
+	err = Unmarshal([]byte{0xa1, 0x01, 0x00}, &Bad{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("duplicate key unmarshal: got %v, want ErrUnsupportedType", err)
+	}
+}
+
+// Tests that embedded fields are correctly sorted with direct fields, including
+// negative keys which sort after positives in CBOR deterministic encoding.
+func TestMapEmbedKeyOrder(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+	}
+	type WithNeg struct {
+		Inner
+		Neg uint64 `cbor:"-1,key"`
+	}
+	original := WithNeg{Inner: Inner{A: 10, B: "hi"}, Neg: 99}
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	// Keys should be sorted: 1, 2, -1 (positives before negatives in CBOR)
+	if data[0] != 0xa3 {
+		t.Errorf("expected map header 0xa3, got %x", data[0])
+	}
+	var decoded WithNeg
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if decoded.A != 10 || decoded.B != "hi" || decoded.Neg != 99 {
+		t.Errorf("roundtrip failed: got %+v", decoded)
+	}
+}
+
+// Tests that a direct field key colliding with an embedded field key is
+// detected on both marshal and unmarshal.
+func TestMapEmbedDirectCollision(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+	}
+	type Clash struct {
+		Inner
+		X uint64 `cbor:"1,key"` // same key as Inner.A
+	}
+	_, err := Marshal(Clash{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("duplicate key marshal: got %v, want ErrUnsupportedType", err)
+	}
+	err = Unmarshal([]byte{0xa2, 0x01, 0x00, 0x02, 0x60}, &Clash{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("duplicate key unmarshal: got %v, want ErrUnsupportedType", err)
+	}
+}
+
+// Tests that wire data containing a key not claimed by any field or embed
+// is rejected during unmarshal.
+func TestMapEmbedUnknownKey(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+	}
+	type Embedded struct {
+		Inner
+		C uint64 `cbor:"3,key"`
+	}
+	// Hand-craft CBOR: {1: 1, 2: "two", 3: 3, 99: 0} — key 99 is unknown
+	enc := NewEncoder()
+	enc.EncodeMapHeader(4)
+	enc.EncodeInt(1)
+	enc.EncodeUint(1)
+	enc.EncodeInt(2)
+	enc.EncodeText("two")
+	enc.EncodeInt(3)
+	enc.EncodeUint(3)
+	enc.EncodeInt(99)
+	enc.EncodeUint(0)
+
+	err := Unmarshal(enc.Bytes(), &Embedded{})
+	if !errors.Is(err, ErrUnexpectedItemCount) {
+		t.Errorf("unknown key: got %v, want ErrUnexpectedItemCount", err)
+	}
+}
+
+// Tests that out-of-order keys in wire data are rejected during unmarshal
+// of a struct with embedded fields.
+func TestMapEmbedKeyOrderRejected(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+	}
+	type Embedded struct {
+		Inner
+		C uint64 `cbor:"3,key"`
+	}
+	// Hand-craft CBOR with keys out of order: {2: "x", 1: 1, 3: 3}
+	enc := NewEncoder()
+	enc.EncodeMapHeader(3)
+	enc.EncodeInt(2)
+	enc.EncodeText("x")
+	enc.EncodeInt(1)
+	enc.EncodeUint(1)
+	enc.EncodeInt(3)
+	enc.EncodeUint(3)
+
+	err := Unmarshal(enc.Bytes(), &Embedded{})
+	if !errors.Is(err, ErrInvalidMapKeyOrder) {
+		t.Errorf("out-of-order keys: got %v, want ErrInvalidMapKeyOrder", err)
+	}
+}
+
+// Tests that wire data with a literally repeated key is rejected during
+// unmarshal of a struct with embedded fields.
+func TestMapEmbedWireDuplicateKey(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+	}
+	type Embedded struct {
+		Inner
+		C uint64 `cbor:"3,key"`
+	}
+	// Hand-craft CBOR: {1: 1, 1: 2, 2: "x", 3: 3} — duplicate key 1
+	enc := NewEncoder()
+	enc.EncodeMapHeader(4)
+	enc.EncodeInt(1)
+	enc.EncodeUint(1)
+	enc.EncodeInt(1)
+	enc.EncodeUint(2)
+	enc.EncodeInt(2)
+	enc.EncodeText("x")
+	enc.EncodeInt(3)
+	enc.EncodeUint(3)
+
+	err := Unmarshal(enc.Bytes(), &Embedded{})
+	if !errors.Is(err, ErrUnexpectedItemCount) {
+		t.Errorf("duplicate wire key: got %v, want ErrUnexpectedItemCount", err)
+	}
+}
+
+// Tests that EncodeRaw appends pre-encoded bytes and DecodeRaw captures a
+// complete CBOR item, round-tripping through the encoder/decoder.
+func TestEncodeDecodeRaw(t *testing.T) {
+	// Encode a map manually, then DecodeRaw each value
+	enc := NewEncoder()
+	enc.EncodeMapHeader(2)
+	enc.EncodeInt(1)
+	enc.EncodeRaw(Raw{0x18, 0x2a}) // uint 42
+	enc.EncodeInt(2)
+	enc.EncodeRaw(Raw{0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f}) // "hello"
+
+	dec := NewDecoder(enc.Bytes())
+	length, err := dec.DecodeMapHeader()
+	if err != nil {
+		t.Fatalf("DecodeMapHeader: %v", err)
+	}
+	if length != 2 {
+		t.Fatalf("map length: got %d, want 2", length)
+	}
+	for i := range int(length) {
+		if _, err := dec.DecodeInt(); err != nil {
+			t.Fatalf("entry %d key: %v", i, err)
+		}
+		raw, err := dec.DecodeRaw()
+		if err != nil {
+			t.Fatalf("entry %d DecodeRaw: %v", i, err)
+		}
+		if i == 0 {
+			if !bytes.Equal(raw, Raw{0x18, 0x2a}) {
+				t.Errorf("entry 0: got %x, want 182a", raw)
+			}
+		} else {
+			if !bytes.Equal(raw, Raw{0x65, 0x68, 0x65, 0x6c, 0x6c, 0x6f}) {
+				t.Errorf("entry 1: got %x, want 6568656c6c6f", raw)
+			}
+		}
+	}
+	if err := dec.Finish(); err != nil {
+		t.Fatalf("Finish: %v", err)
+	}
+}
+
 // Tests that deeply nested CBOR structures are rejected with an error instead
 // of causing a stack overflow, but nesting up to the maximum depth is still
 // accepted.
