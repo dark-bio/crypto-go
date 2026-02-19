@@ -534,9 +534,22 @@ func mapFields(t reflect.Type) ([]fieldInfo, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%w: field %s has invalid key key %q", ErrUnsupportedType, f.Name, parts[0])
 		}
+		if optional && !isOptionalCapable(f.Type) {
+			return nil, fmt.Errorf("%w: field %s is optional but type %s is not nilable (use *T, []byte, or Option[T])", ErrUnsupportedType, f.Name, f.Type)
+		}
 		fields = append(fields, fieldInfo{field: f, key: key, optional: optional})
 	}
 	return fields, nil
+}
+
+// isOptionalCapable reports whether a type can meaningfully be optional in a
+// map context (i.e., can distinguish "absent" from "zero value"). Only pointer
+// types, byte slices, and Option[T] qualify.
+func isOptionalCapable(t reflect.Type) bool {
+	if t.Kind() == reflect.Ptr || (t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8) {
+		return true
+	}
+	return isOptionType(t)
 }
 
 // arrayFieldInfo holds a struct field info for array encoding.

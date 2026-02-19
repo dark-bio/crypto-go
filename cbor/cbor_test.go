@@ -1253,6 +1253,27 @@ func TestMapOptionalRejection(t *testing.T) {
 	if !errors.Is(err, ErrUnexpectedNull) {
 		t.Errorf("optional Option[uint64] with null value: got %v, want ErrUnexpectedNull", err)
 	}
+
+	// Non-nilable types tagged optional should fail at marshal/unmarshal time
+	type badOptionalString struct {
+		Name string `cbor:"1,key,optional"`
+	}
+	_, err = Marshal(badOptionalString{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("optional string field: got %v, want ErrUnsupportedType", err)
+	}
+	err = Unmarshal([]byte{0xa1, 0x01, 0x60}, &badOptionalString{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("optional string field decode: got %v, want ErrUnsupportedType", err)
+	}
+
+	type badOptionalUint struct {
+		Val uint64 `cbor:"1,key,optional"`
+	}
+	_, err = Marshal(badOptionalUint{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("optional uint64 field: got %v, want ErrUnsupportedType", err)
+	}
 }
 
 // Tests that deeply nested CBOR structures are rejected with an error instead
