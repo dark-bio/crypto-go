@@ -499,9 +499,29 @@ type fieldInfo struct {
 	optional bool
 }
 
-// mapFields extracts fields with cbor:"N,key" tags from a struct type.
-// Returns an error if a field has an invalid key tag.
+// mapFields extracts fields with cbor:"N,key" tags from a struct type,
+// recursing into anonymous (embedded) struct fields. Returns an error if
+// a field has an invalid key tag or duplicate keys exist across fields.
 func mapFields(t reflect.Type) ([]fieldInfo, error) {
+	fields, err := collectMapFields(t, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Detect duplicate keys across all fields (including embedded)
+	seen := make(map[int64]string)
+	for _, f := range fields {
+		if prev, ok := seen[f.key]; ok {
+			return nil, fmt.Errorf("%w: duplicate CBOR key %d (fields %s and %s)", ErrUnsupportedType, f.key, prev, f.field.Name)
+		}
+		seen[f.key] = f.field.Name
+	}
+	return fields, nil
+}
+
+// collectMapFields recursively collects fields with cbor:"N,key" tags,
+// following anonymous (embedded) struct fields. prefix is the field index
+// path from the top-level struct to the current type.
+func collectMapFields(t reflect.Type, prefix []int) ([]fieldInfo, error) {
 	var fields []fieldInfo
 	for i := range t.NumField() {
 		f := t.Field(i)
@@ -510,6 +530,17 @@ func mapFields(t reflect.Type) ([]fieldInfo, error) {
 		}
 		tag := f.Tag.Get("cbor")
 		if tag == "" {
+			// Anonymous struct field without a cbor tag: recurse into it
+			if f.Anonymous && f.Type.Kind() == reflect.Struct {
+				inner := make([]int, len(prefix)+1)
+				copy(inner, prefix)
+				inner[len(prefix)] = i
+				sub, err := collectMapFields(f.Type, inner)
+				if err != nil {
+					return nil, err
+				}
+				fields = append(fields, sub...)
+			}
 			continue
 		}
 		parts := strings.Split(tag, ",")
@@ -537,6 +568,11 @@ func mapFields(t reflect.Type) ([]fieldInfo, error) {
 		if optional && !isOptionalCapable(f.Type) {
 			return nil, fmt.Errorf("%w: field %s is optional but type %s is not nilable (use *T, []byte, or Option[T])", ErrUnsupportedType, f.Name, f.Type)
 		}
+		// Build full field index path for FieldByIndex navigation
+		fullIndex := make([]int, len(prefix)+1)
+		copy(fullIndex, prefix)
+		fullIndex[len(prefix)] = i
+		f.Index = fullIndex
 		fields = append(fields, fieldInfo{field: f, key: key, optional: optional})
 	}
 	return fields, nil

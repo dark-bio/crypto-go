@@ -153,6 +153,11 @@ func (e *Encoder) EncodeNull() {
 	e.buf = append(e.buf, majorSimple<<5|simpleNull)
 }
 
+// EncodeRaw appends pre-encoded CBOR bytes to the buffer.
+func (e *Encoder) EncodeRaw(raw Raw) {
+	e.buf = append(e.buf, raw...)
+}
+
 // encodeLength encodes a major type with an unsigned integer, which defines
 // the length for most types, or the value itself for integers.
 func (e *Encoder) encodeLength(majorType uint8, length uint64) {
@@ -302,6 +307,11 @@ func (d *Decoder) DecodeArrayHeader() (uint64, error) {
 	if major != majorArray {
 		return 0, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorArray)
 	}
+	// Sanity check: each element needs at least 1 byte
+	remaining := uint64(len(d.data) - d.pos)
+	if length > remaining {
+		return 0, ErrUnexpectedEOF
+	}
 	return length, nil
 }
 
@@ -314,6 +324,11 @@ func (d *Decoder) DecodeMapHeader() (uint64, error) {
 	}
 	if major != majorMap {
 		return 0, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorMap)
+	}
+	// Sanity check: each key-value pair needs at least 2 bytes
+	remaining := uint64(len(d.data) - d.pos)
+	if length > remaining/2 {
+		return 0, ErrUnexpectedEOF
 	}
 	return length, nil
 }
@@ -360,6 +375,15 @@ func (d *Decoder) PeekInt() (int64, error) {
 	val, err := d.DecodeInt()
 	d.pos = saved
 	return val, err
+}
+
+// DecodeRaw captures one complete CBOR item as raw bytes without parsing it.
+func (d *Decoder) DecodeRaw() (Raw, error) {
+	start := d.pos
+	if err := skipObject(d, maxDepth); err != nil {
+		return nil, err
+	}
+	return append(Raw(nil), d.data[start:d.pos]...), nil
 }
 
 // decodeHeader extracts the major type and the integer value embedded as additional info.
