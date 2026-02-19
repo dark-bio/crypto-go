@@ -537,9 +537,9 @@ func TestArrayRejection(t *testing.T) {
 // Tests that array structs with optional and Option fields encode/decode correctly.
 func TestArrayOptionalEncoding(t *testing.T) {
 	type TestArrayOptional struct {
-		_           struct{}       `cbor:"_,array"`
+		_           struct{} `cbor:"_,array"`
 		Required    uint64
-		OptBytes    []byte         `cbor:"_,optional"`
+		OptBytes    []byte `cbor:"_,optional"`
 		Nullable    Option[uint64]
 		OptNullable Option[uint64] `cbor:"_,optional"`
 	}
