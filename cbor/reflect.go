@@ -170,7 +170,11 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 			fields := arrayFields(t)
 			enc.EncodeArrayHeader(len(fields))
 			for _, f := range fields {
-				if err := encodeValue(enc, v.FieldByIndex(f.field.Index), f.optional); err != nil {
+				fv, err := fieldByIndex(v, f.field.Index, false)
+				if err != nil {
+					return err
+				}
+				if err := encodeValue(enc, fv, f.optional); err != nil {
 					return err
 				}
 			}
@@ -192,13 +196,20 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 		// Optional fields that are nil/None are omitted entirely.
 		count := 0
 		for _, mf := range mFields {
-			if !mf.optional || !isOptionalNil(v.FieldByIndex(mf.field.Index)) {
+			fv, err := fieldByIndex(v, mf.field.Index, false)
+			if err != nil {
+				return err
+			}
+			if !mf.optional || !isOptionalNil(fv) {
 				count++
 			}
 		}
 		enc.EncodeMapHeader(count)
 		for _, mf := range mFields {
-			fv := v.FieldByIndex(mf.field.Index)
+			fv, err := fieldByIndex(v, mf.field.Index, false)
+			if err != nil {
+				return err
+			}
 			if mf.optional && isOptionalNil(fv) {
 				continue
 			}
@@ -396,7 +407,11 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 				return fmt.Errorf("%w: %d, want %d", ErrUnexpectedItemCount, length, len(fields))
 			}
 			for _, f := range fields {
-				if err := decodeValue(dec, v.FieldByIndex(f.field.Index), f.optional); err != nil {
+				fv, err := fieldByIndex(v, f.field.Index, true)
+				if err != nil {
+					return err
+				}
+				if err := decodeValue(dec, fv, f.optional); err != nil {
 					return err
 				}
 			}
@@ -440,7 +455,11 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 					if mf.optional && dec.PeekNull() {
 						return ErrUnexpectedNull
 					}
-					if err := decodeValue(dec, v.FieldByIndex(mf.field.Index), mf.optional); err != nil {
+					fv, err := fieldByIndex(v, mf.field.Index, true)
+					if err != nil {
+						return err
+					}
+					if err := decodeValue(dec, fv, mf.optional); err != nil {
 						return err
 					}
 					continue
@@ -530,14 +549,21 @@ func collectMapFields(t reflect.Type, prefix []int) ([]fieldInfo, error) {
 		}
 		tag := f.Tag.Get("cbor")
 		if tag == "" {
-			// Anonymous struct field without a cbor tag: recurse into it
-			if f.Anonymous && f.Type.Kind() == reflect.Struct {
+			// Anonymous embedded struct field without a cbor tag: recurse into it.
+			if f.Anonymous {
+				embedType, ok := embeddedStructType(f.Type)
+				if !ok {
+					continue
+				}
 				inner := make([]int, len(prefix)+1)
 				copy(inner, prefix)
 				inner[len(prefix)] = i
-				sub, err := collectMapFields(f.Type, inner)
+				sub, err := collectMapFields(embedType, inner)
 				if err != nil {
 					return nil, err
+				}
+				if len(sub) == 0 && len(structFields(embedType)) > 0 {
+					return nil, fmt.Errorf("%w: embedded field %s has no CBOR map keys", ErrUnsupportedType, f.Name)
 				}
 				fields = append(fields, sub...)
 			}
@@ -555,6 +581,9 @@ func collectMapFields(t reflect.Type, prefix []int) ([]fieldInfo, error) {
 			}
 		}
 		if !hasKeyAsInt {
+			if f.Anonymous {
+				return nil, fmt.Errorf("%w: anonymous field %s has cbor tag but no integer key", ErrUnsupportedType, f.Name)
+			}
 			continue
 		}
 		// Parse the integer key from the first part
@@ -576,6 +605,40 @@ func collectMapFields(t reflect.Type, prefix []int) ([]fieldInfo, error) {
 		fields = append(fields, fieldInfo{field: f, key: key, optional: optional})
 	}
 	return fields, nil
+}
+
+// embeddedStructType unwraps an anonymous embedded field type and returns the
+// struct type it refers to. Supports both T and *T anonymous fields.
+func embeddedStructType(t reflect.Type) (reflect.Type, bool) {
+	if t.Kind() == reflect.Struct {
+		return t, true
+	}
+	if t.Kind() == reflect.Ptr && t.Elem().Kind() == reflect.Struct {
+		return t.Elem(), true
+	}
+	return nil, false
+}
+
+// fieldByIndex resolves a nested field path, optionally allocating nil pointers
+// encountered along the way when create is true.
+func fieldByIndex(v reflect.Value, index []int, create bool) (reflect.Value, error) {
+	cur := v
+	for _, i := range index {
+		if cur.Kind() == reflect.Ptr {
+			if cur.IsNil() {
+				if !create {
+					return reflect.Value{}, ErrUnexpectedNil
+				}
+				cur.Set(reflect.New(cur.Type().Elem()))
+			}
+			cur = cur.Elem()
+		}
+		if cur.Kind() != reflect.Struct {
+			return reflect.Value{}, fmt.Errorf("%w: %s", ErrUnsupportedType, cur.Type())
+		}
+		cur = cur.Field(i)
+	}
+	return cur, nil
 }
 
 // isOptionalCapable reports whether a type can meaningfully be optional in a

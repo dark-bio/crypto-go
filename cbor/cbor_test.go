@@ -1383,6 +1383,81 @@ func TestMapEmbedNested(t *testing.T) {
 	}
 }
 
+// Tests that anonymous embedded pointers are flattened like value embeds.
+func TestMapEmbedPointer(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+	}
+	type Embedded struct {
+		*Inner
+		C uint64 `cbor:"3,key"`
+	}
+	original := Embedded{Inner: &Inner{A: 1, B: "two"}, C: 3}
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if data[0] != 0xa3 {
+		t.Errorf("expected map header 0xa3, got %x", data[0])
+	}
+
+	var decoded Embedded
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if decoded.Inner == nil || decoded.A != 1 || decoded.B != "two" || decoded.C != 3 {
+		t.Errorf("roundtrip failed: got %+v", decoded)
+	}
+
+	// Nil embedded pointer should fail: embed fields are required schema.
+	_, err = Marshal(Embedded{C: 3})
+	if !errors.Is(err, ErrUnexpectedNil) {
+		t.Errorf("nil embedded pointer marshal: got %v, want ErrUnexpectedNil", err)
+	}
+}
+
+// Tests that anonymous embedded fields with a cbor tag but without key marker
+// are rejected instead of silently ignored.
+func TestMapEmbedAnonymousTaggedRejected(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+	}
+	type Bad struct {
+		Inner `cbor:",optional"`
+		B     uint64 `cbor:"2,key"`
+	}
+	_, err := Marshal(Bad{Inner: Inner{A: 1}, B: 2})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("tagged anonymous embed marshal: got %v, want ErrUnsupportedType", err)
+	}
+	err = Unmarshal([]byte{0xa2, 0x01, 0x01, 0x02, 0x02}, &Bad{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("tagged anonymous embed unmarshal: got %v, want ErrUnsupportedType", err)
+	}
+}
+
+// Tests that embedding an array-mode struct into a map-mode struct is rejected
+// rather than silently contributing no keys.
+func TestMapEmbedArrayModeRejected(t *testing.T) {
+	type InnerArray struct {
+		_ struct{} `cbor:"_,array"`
+		A uint64
+	}
+	type OuterMap struct {
+		InnerArray
+		B uint64 `cbor:"1,key"`
+	}
+	_, err := Marshal(OuterMap{InnerArray: InnerArray{A: 7}, B: 1})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("array-mode embed marshal: got %v, want ErrUnsupportedType", err)
+	}
+	err = Unmarshal([]byte{0xa1, 0x01, 0x01}, &OuterMap{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("array-mode embed unmarshal: got %v, want ErrUnsupportedType", err)
+	}
+}
+
 // Tests that optional fields inside embedded structs work correctly.
 func TestMapEmbedOptional(t *testing.T) {
 	type Base struct {
