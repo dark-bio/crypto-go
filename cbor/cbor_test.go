@@ -953,10 +953,11 @@ func TestOptionComplexTypes(t *testing.T) {
 
 // Test struct for map encoding/decoding with optional fields.
 type testMapOptional struct {
-	Required  uint64         `cbor:"1,key"`
-	Optional1 *string        `cbor:"2,key,optional"`
-	Optional2 []byte         `cbor:"-1,key,optional"`
-	Nullable  Option[uint64] `cbor:"3,key"`
+	Required    uint64         `cbor:"1,key"`
+	Optional1   *string        `cbor:"2,key,optional"`
+	Optional2   []byte         `cbor:"-1,key,optional"`
+	Nullable    Option[uint64] `cbor:"3,key"`
+	OptionalU64 Option[uint64] `cbor:"4,key,optional"`
 }
 
 // Tests that optional map fields are omitted when nil during encoding.
@@ -964,24 +965,26 @@ func TestMapOptionalEncoding(t *testing.T) {
 	// All fields present
 	s := "hello"
 	m := testMapOptional{
-		Required:  42,
-		Optional1: &s,
-		Optional2: []byte{1, 2, 3},
-		Nullable:  MakeSome(uint64(1)),
+		Required:    42,
+		Optional1:   &s,
+		Optional2:   []byte{1, 2, 3},
+		Nullable:    MakeSome(uint64(1)),
+		OptionalU64: MakeSome(uint64(99)),
 	}
 	data, err := Marshal(m)
 	if err != nil {
 		t.Fatalf("Marshal all fields: %v", err)
 	}
-	if data[0] != 0xa4 { // map with 4 entries
-		t.Errorf("all fields: got header %x, want 0xa4", data[0])
+	if data[0] != 0xa5 { // map with 5 entries
+		t.Errorf("all fields: got header %x, want 0xa5", data[0])
 	}
 	var decoded testMapOptional
 	if err := Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal all fields: %v", err)
 	}
 	if decoded.Required != 42 || decoded.Optional1 == nil || *decoded.Optional1 != "hello" ||
-		!bytes.Equal(decoded.Optional2, []byte{1, 2, 3}) || decoded.Nullable.Value != uint64(1) {
+		!bytes.Equal(decoded.Optional2, []byte{1, 2, 3}) || decoded.Nullable.Value != uint64(1) ||
+		!decoded.OptionalU64.Some || decoded.OptionalU64.Value != 99 {
 		t.Errorf("all fields roundtrip failed: %+v", decoded)
 	}
 
@@ -1001,7 +1004,7 @@ func TestMapOptionalEncoding(t *testing.T) {
 	if err := Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal required only: %v", err)
 	}
-	if decoded.Required != 42 || decoded.Optional1 != nil || decoded.Optional2 != nil || decoded.Nullable.Some {
+	if decoded.Required != 42 || decoded.Optional1 != nil || decoded.Optional2 != nil || decoded.Nullable.Some || decoded.OptionalU64.Some {
 		t.Errorf("required only roundtrip failed: %+v", decoded)
 	}
 
@@ -1019,7 +1022,7 @@ func TestMapOptionalEncoding(t *testing.T) {
 	if err := Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal one optional: %v", err)
 	}
-	if decoded.Required != 42 || decoded.Optional1 == nil || *decoded.Optional1 != "hi" || decoded.Optional2 != nil || decoded.Nullable.Some {
+	if decoded.Required != 42 || decoded.Optional1 == nil || *decoded.Optional1 != "hi" || decoded.Optional2 != nil || decoded.Nullable.Some || decoded.OptionalU64.Some {
 		t.Errorf("one optional roundtrip failed: %+v", decoded)
 	}
 
@@ -1036,8 +1039,26 @@ func TestMapOptionalEncoding(t *testing.T) {
 	if err := Unmarshal(data, &decoded); err != nil {
 		t.Fatalf("Unmarshal other optional: %v", err)
 	}
-	if decoded.Required != 42 || decoded.Optional1 != nil || !bytes.Equal(decoded.Optional2, []byte{0xff}) || decoded.Nullable.Some {
+	if decoded.Required != 42 || decoded.Optional1 != nil || !bytes.Equal(decoded.Optional2, []byte{0xff}) || decoded.Nullable.Some || decoded.OptionalU64.Some {
 		t.Errorf("other optional roundtrip failed: %+v", decoded)
+	}
+
+	// Optional Option[uint64] present (should be included in map)
+	m = testMapOptional{Required: 42, OptionalU64: MakeSome(uint64(7))}
+	data, err = Marshal(m)
+	if err != nil {
+		t.Fatalf("Marshal optional uint64: %v", err)
+	}
+	if data[0] != 0xa3 { // map with 3 entries (Required + Nullable + OptionalU64)
+		t.Errorf("optional uint64: got header %x, want 0xa3", data[0])
+	}
+	decoded = testMapOptional{}
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal optional uint64: %v", err)
+	}
+	if decoded.Required != 42 || decoded.Optional1 != nil || decoded.Optional2 != nil || decoded.Nullable.Some ||
+		!decoded.OptionalU64.Some || decoded.OptionalU64.Value != 7 {
+		t.Errorf("optional uint64 roundtrip failed: %+v", decoded)
 	}
 }
 
@@ -1053,37 +1074,37 @@ func TestMapOptionalDecoding(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Unmarshal required only: %v", err)
 	}
-	if decoded.Required != 42 || decoded.Optional1 != nil || decoded.Optional2 != nil || decoded.Nullable.Some {
+	if decoded.Required != 42 || decoded.Optional1 != nil || decoded.Optional2 != nil || decoded.Nullable.Some || decoded.OptionalU64.Some {
 		t.Errorf("required only: %+v", decoded)
 	}
 
 	// Decode a map with required + first optional
 	decoded = testMapOptional{}
 	err = Unmarshal([]byte{
-		0xa3,                         // map with 3 entries
-		0x01, 0x00,                   // 1: 0
-		0x02, 0x62, 0x68, 0x69,      // 2: "hi"
-		0x03, 0xf6,                   // 3: null
+		0xa3,       // map with 3 entries
+		0x01, 0x00, // 1: 0
+		0x02, 0x62, 0x68, 0x69, // 2: "hi"
+		0x03, 0xf6, // 3: null
 	}, &decoded)
 	if err != nil {
 		t.Fatalf("Unmarshal required + optional1: %v", err)
 	}
-	if decoded.Required != 0 || decoded.Optional1 == nil || *decoded.Optional1 != "hi" || decoded.Optional2 != nil || decoded.Nullable.Some {
+	if decoded.Required != 0 || decoded.Optional1 == nil || *decoded.Optional1 != "hi" || decoded.Optional2 != nil || decoded.Nullable.Some || decoded.OptionalU64.Some {
 		t.Errorf("required + optional1: %+v", decoded)
 	}
 
 	// Decode a map with required + second optional (key -1)
 	decoded = testMapOptional{}
 	err = Unmarshal([]byte{
-		0xa3,                   // map with 3 entries
-		0x01, 0x05,             // 1: 5
-		0x03, 0xf6,             // 3: null
-		0x20, 0x41, 0xab,       // -1: h'ab'
+		0xa3,       // map with 3 entries
+		0x01, 0x05, // 1: 5
+		0x03, 0xf6, // 3: null
+		0x20, 0x41, 0xab, // -1: h'ab'
 	}, &decoded)
 	if err != nil {
 		t.Fatalf("Unmarshal required + optional2: %v", err)
 	}
-	if decoded.Required != 5 || decoded.Optional1 != nil || !bytes.Equal(decoded.Optional2, []byte{0xab}) || decoded.Nullable.Some {
+	if decoded.Required != 5 || decoded.Optional1 != nil || !bytes.Equal(decoded.Optional2, []byte{0xab}) || decoded.Nullable.Some || decoded.OptionalU64.Some {
 		t.Errorf("required + optional2: %+v", decoded)
 	}
 }
@@ -1092,11 +1113,12 @@ func TestMapOptionalDecoding(t *testing.T) {
 func TestMapOptionalRejection(t *testing.T) {
 	// Too many entries
 	err := Unmarshal([]byte{
-		0xa5,       // map with 5 entries (max is 4)
+		0xa6,       // map with 6 entries (max is 5)
 		0x01, 0x00, // 1: 0
 		0x02, 0x60, // 2: ""
 		0x03, 0xf6, // 3: null
-		0x04, 0x00, // 4: 0 (unknown key)
+		0x04, 0x00, // 4: 0
+		0x05, 0x00, // 5: 0 (unknown key)
 		0x20, 0x40, // -1: h''
 	}, &testMapOptional{})
 	if err == nil {
