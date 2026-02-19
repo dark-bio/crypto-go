@@ -188,10 +188,22 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 		slices.SortFunc(mFields, func(a, b fieldInfo) int {
 			return mapKeyCmp(a.key, b.key)
 		})
-		enc.EncodeMapHeader(len(mFields))
+		// Count non-nil optional fields to determine the map header size.
+		// Optional fields that are nil/None are omitted entirely.
+		count := 0
 		for _, mf := range mFields {
+			if !mf.optional || !isOptionalNil(v.FieldByIndex(mf.field.Index)) {
+				count++
+			}
+		}
+		enc.EncodeMapHeader(count)
+		for _, mf := range mFields {
+			fv := v.FieldByIndex(mf.field.Index)
+			if mf.optional && isOptionalNil(fv) {
+				continue
+			}
 			enc.EncodeInt(mf.key)
-			if err := encodeValue(enc, v.FieldByIndex(mf.field.Index), mf.optional); err != nil {
+			if err := encodeValue(enc, fv, mf.optional); err != nil {
 				return err
 			}
 		}
@@ -398,43 +410,45 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		if len(mFields) == 0 && len(structFields(t)) > 0 {
 			return fmt.Errorf("%w: struct %s requires cbor:\"_,array\" or cbor:\"N,key\" tags", ErrUnsupportedType, t.Name())
 		}
-		// Build lookup from key to field
-		keyToField := make(map[int64]fieldInfo, len(mFields))
-		for _, mf := range mFields {
-			keyToField[mf.key] = mf
-		}
-		// Decode the map
+		// Sort fields by key for deterministic decoding order
+		slices.SortFunc(mFields, func(a, b fieldInfo) int {
+			return mapKeyCmp(a.key, b.key)
+		})
+		// Decode the map header
 		length, err := dec.DecodeMapHeader()
 		if err != nil {
 			return err
 		}
-		if int(length) != len(mFields) {
-			return fmt.Errorf("%w: %d, want %d", ErrUnexpectedItemCount, length, len(mFields))
+		if int(length) > len(mFields) {
+			return fmt.Errorf("%w: %d, want at most %d", ErrUnexpectedItemCount, length, len(mFields))
 		}
-		var prevKey *int64
-		for range length {
-			key, err := dec.DecodeInt()
-			if err != nil {
-				return err
-			}
-			// Verify deterministic ordering and no duplicates
-			if prevKey != nil {
-				switch cmp := mapKeyCmp(*prevKey, key); {
-				case cmp == 0:
-					return fmt.Errorf("%w: %d", ErrDuplicateMapKey, key)
-				case cmp > 0:
-					return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, key, *prevKey)
+		// Walk expected keys in sorted order against actual map entries.
+		// Optional fields with missing keys default to zero value; required
+		// fields must be present.
+		remaining := int(length)
+		for _, mf := range mFields {
+			if remaining > 0 {
+				nextKey, err := dec.PeekInt()
+				if err != nil {
+					return err
+				}
+				if nextKey == mf.key {
+					dec.DecodeInt() // consume the peeked key
+					remaining--
+					if err := decodeValue(dec, v.FieldByIndex(mf.field.Index), mf.optional); err != nil {
+						return err
+					}
+					continue
 				}
 			}
-			prevKey = &key
-			// Find the field for this key
-			fi, ok := keyToField[key]
-			if !ok {
-				return fmt.Errorf("%w: unknown map key %d", ErrUnsupportedType, key)
+			// Key not present in the map
+			if !mf.optional {
+				return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, 0, mf.key)
 			}
-			if err := decodeValue(dec, v.FieldByIndex(fi.field.Index), fi.optional); err != nil {
-				return err
-			}
+			// Optional field missing: leave as zero value
+		}
+		if remaining != 0 {
+			return fmt.Errorf("%w: %d, want at most %d", ErrUnexpectedItemCount, length, int(length)-remaining)
 		}
 		return nil
 
@@ -548,4 +562,18 @@ func arrayFields(t reflect.Type) []arrayFieldInfo {
 		fields = append(fields, arrayFieldInfo{field: f, optional: optional})
 	}
 	return fields
+}
+
+// isOptionalNil reports whether an optional field's value is nil/None and should
+// be omitted from map encoding. Handles pointers, nil-able slices, and Option[T].
+func isOptionalNil(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Slice:
+		return v.IsNil()
+	case reflect.Struct:
+		if isOptionType(v.Type()) {
+			return !v.FieldByName("Some").Bool()
+		}
+	}
+	return false
 }
