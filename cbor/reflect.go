@@ -552,7 +552,13 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 			}
 		}
 		// Propagate activity upward through the parent chain.
+		// Snapshot the initially-active groups to avoid mutating
+		// activeGroups during iteration over it.
+		initial := make([]int, 0, len(activeGroups))
 		for g := range activeGroups {
+			initial = append(initial, g)
+		}
+		for _, g := range initial {
 			for p, ok := parents[g]; ok; p, ok = parents[p] {
 				activeGroups[p] = true
 			}
