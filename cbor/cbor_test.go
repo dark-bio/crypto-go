@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -1194,6 +1195,43 @@ func TestMapOptionalDecoding(t *testing.T) {
 	}
 }
 
+// Tests that decoding into a reused destination zeros absent optional fields
+// instead of leaving stale values from a previous decode.
+func TestMapOptionalReusedDestination(t *testing.T) {
+	stale := "stale"
+	dest := testMapOptional{
+		Required:    99,
+		Optional1:   &stale,
+		Optional2:   []byte{0xde, 0xad},
+		Nullable:    Option[uint64]{Some: true, Value: 7},
+		OptionalU64: Option[uint64]{Some: true, Value: 8},
+	}
+	// Wire: {1: 1, 3: null} — only required + nullable, optionals absent
+	data := []byte{
+		0xa2,       // map(2)
+		0x01, 0x01, // key 1, uint 1
+		0x03, 0xf6, // key 3, null
+	}
+	if err := Unmarshal(data, &dest); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if dest.Required != 1 {
+		t.Errorf("Required: got %d, want 1", dest.Required)
+	}
+	if dest.Optional1 != nil {
+		t.Errorf("Optional1: got %v, want nil (stale pointer not cleared)", dest.Optional1)
+	}
+	if dest.Optional2 != nil {
+		t.Errorf("Optional2: got %v, want nil (stale slice not cleared)", dest.Optional2)
+	}
+	if dest.Nullable.Some {
+		t.Errorf("Nullable: got %+v, want None", dest.Nullable)
+	}
+	if dest.OptionalU64.Some {
+		t.Errorf("OptionalU64: got %+v, want None (stale option not cleared)", dest.OptionalU64)
+	}
+}
+
 // Tests that maps with optional fields still reject invalid data.
 func TestMapOptionalRejection(t *testing.T) {
 	// Too many entries
@@ -1393,27 +1431,319 @@ func TestMapEmbedPointer(t *testing.T) {
 		*Inner
 		C uint64 `cbor:"3,key"`
 	}
+	// Non-nil pointer embed: all fields present
 	original := Embedded{Inner: &Inner{A: 1, B: "two"}, C: 3}
 	data, err := Marshal(original)
 	if err != nil {
-		t.Fatalf("Marshal error: %v", err)
+		t.Fatalf("Marshal with pointer: %v", err)
 	}
-	if data[0] != 0xa3 {
-		t.Errorf("expected map header 0xa3, got %x", data[0])
+	if data[0] != 0xa3 { // map with 3 entries
+		t.Errorf("with pointer: expected map header 0xa3, got %x", data[0])
 	}
-
 	var decoded Embedded
 	if err := Unmarshal(data, &decoded); err != nil {
-		t.Fatalf("Unmarshal error: %v", err)
+		t.Fatalf("Unmarshal with pointer: %v", err)
 	}
 	if decoded.Inner == nil || decoded.A != 1 || decoded.B != "two" || decoded.C != 3 {
-		t.Errorf("roundtrip failed: got %+v", decoded)
+		t.Errorf("with pointer roundtrip failed: got %+v", decoded)
 	}
 
-	// Nil embedded pointer should fail: embed fields are required schema.
-	_, err = Marshal(Embedded{C: 3})
-	if !errors.Is(err, ErrUnexpectedNil) {
-		t.Errorf("nil embedded pointer marshal: got %v, want ErrUnexpectedNil", err)
+	// Nil pointer embed: Inner fields omitted from map
+	nilOriginal := Embedded{C: 3}
+	data, err = Marshal(nilOriginal)
+	if err != nil {
+		t.Fatalf("Marshal nil pointer: %v", err)
+	}
+	if data[0] != 0xa1 { // map with 1 entry (only key 3)
+		t.Errorf("nil pointer: expected map header 0xa1, got %x", data[0])
+	}
+	var nilDecoded Embedded
+	if err := Unmarshal(data, &nilDecoded); err != nil {
+		t.Fatalf("Unmarshal nil pointer: %v", err)
+	}
+	if nilDecoded.Inner != nil {
+		t.Errorf("nil pointer roundtrip: expected Inner == nil, got %+v", nilDecoded.Inner)
+	}
+	if nilDecoded.C != 3 {
+		t.Errorf("nil pointer roundtrip: expected C == 3, got %d", nilDecoded.C)
+	}
+}
+
+// Tests that a pointer embed with only some mandatory keys present is rejected.
+// Wire data has key 1 (from *Inner) but not key 2 — partial pointer embed.
+func TestMapEmbedPointerPartialRejected(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+	}
+	type Outer struct {
+		*Inner
+		C uint64 `cbor:"3,key"`
+	}
+	// Hand-craft: {1: 42, 3: 7} — key 1 present (allocates *Inner) but key 2 missing
+	data := []byte{
+		0xa2,             // map(2)
+		0x01, 0x18, 0x2a, // key 1, uint 42
+		0x03, 0x07, // key 3, uint 7
+	}
+	var decoded Outer
+	if err := Unmarshal(data, &decoded); err == nil {
+		t.Fatal("expected error for partial pointer embed, got nil")
+	}
+}
+
+// Tests that a pointer embed with all mandatory keys present but tag-optional
+// ones missing is accepted.
+func TestMapEmbedPointerOptionalFields(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B []byte `cbor:"2,key,optional"`
+	}
+	type Outer struct {
+		*Inner
+		C uint64 `cbor:"3,key"`
+	}
+	// All present: round-trip with optional field set
+	original := Outer{Inner: &Inner{A: 42, B: []byte{0xab}}, C: 7}
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal all present: %v", err)
+	}
+	if data[0] != 0xa3 { // map(3)
+		t.Errorf("all present: expected 0xa3, got %x", data[0])
+	}
+	var decoded Outer
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal all present: %v", err)
+	}
+	if decoded.Inner == nil || decoded.A != 42 || !bytes.Equal(decoded.B, []byte{0xab}) || decoded.C != 7 {
+		t.Errorf("all present roundtrip failed: %+v", decoded)
+	}
+
+	// Mandatory key present, optional key omitted
+	original = Outer{Inner: &Inner{A: 42}, C: 7}
+	data, err = Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal optional omitted: %v", err)
+	}
+	if data[0] != 0xa2 { // map(2): keys 1 and 3, optional key 2 omitted
+		t.Errorf("optional omitted: expected 0xa2, got %x", data[0])
+	}
+	var decoded2 Outer
+	if err := Unmarshal(data, &decoded2); err != nil {
+		t.Fatalf("Unmarshal optional omitted: %v", err)
+	}
+	if decoded2.Inner == nil || decoded2.A != 42 || decoded2.B != nil || decoded2.C != 7 {
+		t.Errorf("optional omitted roundtrip failed: %+v", decoded2)
+	}
+
+	// Nil pointer embed: all fields absent
+	original = Outer{C: 7}
+	data, err = Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal nil embed: %v", err)
+	}
+	if data[0] != 0xa1 { // map(1): only key 3
+		t.Errorf("nil embed: expected 0xa1, got %x", data[0])
+	}
+	var decoded3 Outer
+	if err := Unmarshal(data, &decoded3); err != nil {
+		t.Fatalf("Unmarshal nil embed: %v", err)
+	}
+	if decoded3.Inner != nil {
+		t.Errorf("nil embed: expected Inner == nil, got %+v", decoded3.Inner)
+	}
+	if decoded3.C != 7 {
+		t.Errorf("nil embed: expected C == 7, got %d", decoded3.C)
+	}
+}
+
+// Tests that a pointer embed containing a mandatory value embed enforces
+// all-or-none: either all keys from the pointer embed (including its
+// sub-embed) are present, or none.
+func TestMapEmbedPointerNestedAllOrNone(t *testing.T) {
+	type Sub struct {
+		X uint64 `cbor:"1,key"`
+	}
+	type Inner struct {
+		Sub
+		Y uint64 `cbor:"2,key"`
+	}
+	type Outer struct {
+		*Inner
+		Z uint64 `cbor:"3,key"`
+	}
+	// All present: round-trip
+	original := Outer{Inner: &Inner{Sub: Sub{X: 1}, Y: 2}, Z: 3}
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal all: %v", err)
+	}
+	if data[0] != 0xa3 { // map(3)
+		t.Errorf("all: expected 0xa3, got %x", data[0])
+	}
+	var decoded Outer
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal all: %v", err)
+	}
+	if decoded.Inner == nil || decoded.X != 1 || decoded.Y != 2 || decoded.Z != 3 {
+		t.Errorf("all roundtrip failed: %+v", decoded)
+	}
+
+	// None present (nil pointer): only Z
+	nilOriginal := Outer{Z: 3}
+	data, err = Marshal(nilOriginal)
+	if err != nil {
+		t.Fatalf("Marshal none: %v", err)
+	}
+	if data[0] != 0xa1 { // map(1)
+		t.Errorf("none: expected 0xa1, got %x", data[0])
+	}
+	var decoded2 Outer
+	if err := Unmarshal(data, &decoded2); err != nil {
+		t.Fatalf("Unmarshal none: %v", err)
+	}
+	if decoded2.Inner != nil {
+		t.Errorf("none: expected Inner == nil, got %+v", decoded2.Inner)
+	}
+
+	// Partial: only key 1 (X from Sub) but not key 2 (Y) — rejected
+	partial := []byte{
+		0xa2,       // map(2)
+		0x01, 0x01, // key 1, uint 1
+		0x03, 0x03, // key 3, uint 3
+	}
+	var decoded3 Outer
+	if err := Unmarshal(partial, &decoded3); err == nil {
+		t.Fatal("expected error for partial nested pointer embed, got nil")
+	}
+}
+
+// Tests that nested pointer embeds (*A containing *B) propagate group
+// activity upward: decoding a key from *B activates *A's group too,
+// so missing required keys in *A are rejected.
+func TestMapEmbedNestedPointerAllOrNone(t *testing.T) {
+	type B struct {
+		Y uint64 `cbor:"2,key"`
+	}
+	type A struct {
+		X uint64 `cbor:"1,key"`
+		*B
+	}
+	type O struct {
+		*A
+		Z uint64 `cbor:"3,key"`
+	}
+	// All present: round-trip
+	original := O{A: &A{X: 1, B: &B{Y: 2}}, Z: 3}
+	data, err := Marshal(original)
+	if err != nil {
+		t.Fatalf("Marshal all: %v", err)
+	}
+	var decoded O
+	if err := Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal all: %v", err)
+	}
+	if decoded.A == nil || decoded.B == nil || decoded.X != 1 || decoded.Y != 2 || decoded.Z != 3 {
+		t.Errorf("all roundtrip: got %+v", decoded)
+	}
+
+	// Both pointer embeds nil: only Z present
+	nilOuter := O{Z: 3}
+	data, err = Marshal(nilOuter)
+	if err != nil {
+		t.Fatalf("Marshal none: %v", err)
+	}
+	var decoded2 O
+	if err := Unmarshal(data, &decoded2); err != nil {
+		t.Fatalf("Unmarshal none: %v", err)
+	}
+	if decoded2.A != nil {
+		t.Errorf("none: expected A == nil, got %+v", decoded2.A)
+	}
+
+	// Outer active, inner nil: X present, Y absent — valid (*B is nil)
+	outerOnly := O{A: &A{X: 1}, Z: 3}
+	data, err = Marshal(outerOnly)
+	if err != nil {
+		t.Fatalf("Marshal outer-only: %v", err)
+	}
+	var decoded3 O
+	if err := Unmarshal(data, &decoded3); err != nil {
+		t.Fatalf("Unmarshal outer-only: %v", err)
+	}
+	if decoded3.A == nil || decoded3.X != 1 || decoded3.B != nil {
+		t.Errorf("outer-only: got %+v", decoded3)
+	}
+
+	// Bug case: inner key present (Y from *B), outer key missing (X from *A).
+	// Wire {2: val, 3: val} must fail — *B's activity propagates to *A,
+	// making X required.
+	partial := []byte{
+		0xa2,       // map(2)
+		0x02, 0x02, // key 2, uint 2
+		0x03, 0x03, // key 3, uint 3
+	}
+	var decoded4 O
+	if err := Unmarshal(partial, &decoded4); err == nil {
+		t.Fatal("expected error for inner-active-outer-missing, got nil")
+	} else if !errors.Is(err, ErrMissingMapKey) {
+		t.Fatalf("expected ErrMissingMapKey, got %v", err)
+	}
+}
+
+// Tests that out-of-order keys in a pointer embed produce ErrInvalidMapKeyOrder
+// (not ErrUnexpectedItemCount) for consistent error semantics.
+func TestMapEmbedPointerKeyOrderRejected(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+	}
+	type Outer struct {
+		*Inner
+		C uint64 `cbor:"3,key"`
+	}
+	// Wire: {2: "x", 1: 42, 3: 7} — keys 2,1 out of order
+	data := []byte{
+		0xa3,             // map(3)
+		0x02, 0x61, 0x78, // key 2, text "x"
+		0x01, 0x18, 0x2a, // key 1, uint 42
+		0x03, 0x07, // key 3, uint 7
+	}
+	var decoded Outer
+	err := Unmarshal(data, &decoded)
+	if !errors.Is(err, ErrInvalidMapKeyOrder) {
+		t.Fatalf("expected ErrInvalidMapKeyOrder, got %v", err)
+	}
+}
+
+// Tests that decoding into a pre-initialized struct with a non-nil pointer
+// embed nils it out when the wire data omits all embed keys, preventing
+// stale data from surviving.
+func TestMapEmbedPointerReusedDestination(t *testing.T) {
+	type Inner struct {
+		A uint64 `cbor:"1,key"`
+		B string `cbor:"2,key"`
+	}
+	type Outer struct {
+		*Inner
+		C uint64 `cbor:"3,key"`
+	}
+	// Wire data: {3: 7} — only the direct field, no embed keys
+	data := []byte{
+		0xa1,       // map(1)
+		0x03, 0x07, // key 3, uint 7
+	}
+	// Destination has a pre-existing non-nil Inner — decode must nil it out
+	dest := Outer{Inner: &Inner{A: 99, B: "stale"}, C: 0}
+	if err := Unmarshal(data, &dest); err != nil {
+		t.Fatalf("Unmarshal into pre-initialized dest: %v", err)
+	}
+	if dest.C != 7 {
+		t.Errorf("expected C == 7, got %d", dest.C)
+	}
+	if dest.Inner != nil {
+		t.Errorf("expected Inner == nil (stale pointer cleared), got %+v", dest.Inner)
 	}
 }
 
@@ -1455,6 +1785,28 @@ func TestMapEmbedArrayModeRejected(t *testing.T) {
 	err = Unmarshal([]byte{0xa1, 0x01, 0x01}, &OuterMap{})
 	if !errors.Is(err, ErrUnsupportedType) {
 		t.Errorf("array-mode embed unmarshal: got %v, want ErrUnsupportedType", err)
+	}
+}
+
+// Tests that an array-mode struct with keyed fields is also rejected when
+// embedded into a map-mode struct (the keyed fields would otherwise slip
+// through and produce context-dependent CBOR).
+func TestMapEmbedArrayModeHybridRejected(t *testing.T) {
+	type Hybrid struct {
+		_ struct{} `cbor:"_,array"`
+		X uint64   `cbor:"1,key"`
+	}
+	type Outer struct {
+		Hybrid
+		Y uint64 `cbor:"2,key"`
+	}
+	_, err := Marshal(Outer{Hybrid: Hybrid{X: 42}, Y: 7})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("hybrid embed marshal: got %v, want ErrUnsupportedType", err)
+	}
+	err = Unmarshal([]byte{0xa2, 0x01, 0x2a, 0x02, 0x07}, &Outer{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("hybrid embed unmarshal: got %v, want ErrUnsupportedType", err)
 	}
 }
 
@@ -1575,6 +1927,57 @@ func TestMapEmbedDirectCollision(t *testing.T) {
 	}
 }
 
+// Tests that a self-referential pointer embed is rejected with
+// ErrUnsupportedType rather than causing a stack overflow.
+func TestMapEmbedRecursiveRejected(t *testing.T) {
+	type Tree struct {
+		*Tree
+		Val uint64 `cbor:"1,key"`
+	}
+	_, err := Marshal(Tree{Val: 42})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("recursive embed marshal: got %v, want ErrUnsupportedType", err)
+	}
+	err = Unmarshal([]byte{0xa1, 0x01, 0x2a}, &Tree{})
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Errorf("recursive embed unmarshal: got %v, want ErrUnsupportedType", err)
+	}
+}
+
+// Tests that the same type embedded via two sibling branches is not
+// falsely rejected as recursive. The visited set must behave as a
+// recursion stack (pop after return), not a global ever-seen set.
+func TestMapEmbedSiblingsSameType(t *testing.T) {
+	type Shared struct {
+		X uint64 `cbor:"1,key"`
+	}
+	type Left struct {
+		Shared
+		L uint64 `cbor:"2,key"`
+	}
+	type Right struct {
+		Shared
+		R uint64 `cbor:"3,key"`
+	}
+	// Shared appears in both Left and Right — keys will collide (duplicate
+	// key 1), but the error must be about duplicate keys, not "recursive embed".
+	type Root struct {
+		Left
+		Right
+	}
+	_, err := Marshal(Root{})
+	if err == nil {
+		t.Fatal("expected error for duplicate key from sibling embeds, got nil")
+	}
+	if !errors.Is(err, ErrUnsupportedType) {
+		t.Fatalf("expected ErrUnsupportedType, got %v", err)
+	}
+	// Verify it's a duplicate-key error, not a recursive-embed error.
+	if strings.Contains(err.Error(), "recursive") {
+		t.Errorf("false recursive detection: %v", err)
+	}
+}
+
 // Tests that wire data containing a key not claimed by any field or embed
 // is rejected during unmarshal.
 func TestMapEmbedUnknownKey(t *testing.T) {
@@ -1605,7 +2008,9 @@ func TestMapEmbedUnknownKey(t *testing.T) {
 }
 
 // Tests that out-of-order keys in wire data are rejected during unmarshal
-// of a struct with embedded fields.
+// of a struct with embedded fields. The sorted-walk decoder cannot
+// distinguish "missing" from "late", so it reports the first absent
+// required key as ErrMissingMapKey.
 func TestMapEmbedKeyOrderRejected(t *testing.T) {
 	type Inner struct {
 		A uint64 `cbor:"1,key"`
@@ -1626,13 +2031,15 @@ func TestMapEmbedKeyOrderRejected(t *testing.T) {
 	enc.EncodeUint(3)
 
 	err := Unmarshal(enc.Bytes(), &Embedded{})
-	if !errors.Is(err, ErrInvalidMapKeyOrder) {
-		t.Errorf("out-of-order keys: got %v, want ErrInvalidMapKeyOrder", err)
+	if !errors.Is(err, ErrMissingMapKey) {
+		t.Errorf("out-of-order keys: got %v, want ErrMissingMapKey", err)
 	}
 }
 
 // Tests that wire data with a literally repeated key is rejected during
-// unmarshal of a struct with embedded fields.
+// unmarshal of a struct with embedded fields. When the duplicate causes
+// the header count to exceed the field count, ErrUnexpectedItemCount
+// fires at the header check before the walk even begins.
 func TestMapEmbedWireDuplicateKey(t *testing.T) {
 	type Inner struct {
 		A uint64 `cbor:"1,key"`
@@ -1643,6 +2050,7 @@ func TestMapEmbedWireDuplicateKey(t *testing.T) {
 		C uint64 `cbor:"3,key"`
 	}
 	// Hand-craft CBOR: {1: 1, 1: 2, 2: "x", 3: 3} — duplicate key 1
+	// Header = 4 but only 3 fields → caught at header count check.
 	enc := NewEncoder()
 	enc.EncodeMapHeader(4)
 	enc.EncodeInt(1)
@@ -1656,7 +2064,129 @@ func TestMapEmbedWireDuplicateKey(t *testing.T) {
 
 	err := Unmarshal(enc.Bytes(), &Embedded{})
 	if !errors.Is(err, ErrUnexpectedItemCount) {
-		t.Errorf("duplicate wire key: got %v, want ErrUnexpectedItemCount", err)
+		t.Errorf("duplicate wire key (header overflow): got %v, want ErrUnexpectedItemCount", err)
+	}
+}
+
+// Tests that a duplicate key detected during the walk (an already-decoded
+// key reappearing) produces ErrDuplicateMapKey, not ErrInvalidMapKeyOrder.
+func TestMapWireDuplicateKeyMidWalk(t *testing.T) {
+	type S struct {
+		A uint64 `cbor:"1,key"`
+		B uint64 `cbor:"2,key"`
+		C uint64 `cbor:"3,key"`
+	}
+	// Wire: {1: 1, 1: 2, 3: 3} — header=3, fields=3, duplicate key 1
+	// Walk consumes key 1, then encounters key 1 again while expecting key 2.
+	enc := NewEncoder()
+	enc.EncodeMapHeader(3)
+	enc.EncodeInt(1)
+	enc.EncodeUint(1)
+	enc.EncodeInt(1)
+	enc.EncodeUint(2)
+	enc.EncodeInt(3)
+	enc.EncodeUint(3)
+
+	err := Unmarshal(enc.Bytes(), &S{})
+	if !errors.Is(err, ErrDuplicateMapKey) {
+		t.Errorf("mid-walk duplicate: got %v, want ErrDuplicateMapKey", err)
+	}
+}
+
+// Tests that a duplicate of the last expected key (trailing duplicate)
+// produces ErrDuplicateMapKey, not the nonsensical "N must come before N".
+func TestMapWireDuplicateKeyTrailing(t *testing.T) {
+	type S struct {
+		A *uint64 `cbor:"1,key,optional"`
+		B uint64  `cbor:"3,key"`
+	}
+	// Wire: {3: 7, 3: 8} — header=2, fields=2, duplicate key 3.
+	// Walk: key 1 (optional) absent, key 3 matches and is consumed,
+	// then remaining=1 with another key 3 trailing.
+	enc := NewEncoder()
+	enc.EncodeMapHeader(2)
+	enc.EncodeInt(3)
+	enc.EncodeUint(7)
+	enc.EncodeInt(3)
+	enc.EncodeUint(8)
+
+	err := Unmarshal(enc.Bytes(), &S{})
+	if !errors.Is(err, ErrDuplicateMapKey) {
+		t.Errorf("trailing duplicate: got %v, want ErrDuplicateMapKey", err)
+	}
+}
+
+// Tests that an unknown key falling between expected keys produces
+// ErrUnexpectedItemCount (not ErrInvalidMapKeyOrder).
+func TestMapEmbedUnknownKeyMidRange(t *testing.T) {
+	type S struct {
+		A uint64 `cbor:"1,key"`
+		B uint64 `cbor:"3,key"`
+		C uint64 `cbor:"5,key"`
+	}
+	// Wire: {1: 1, 2: 2, 5: 5} — key 2 is unknown, between expected 1 and 3
+	enc := NewEncoder()
+	enc.EncodeMapHeader(3)
+	enc.EncodeInt(1)
+	enc.EncodeUint(1)
+	enc.EncodeInt(2)
+	enc.EncodeUint(2)
+	enc.EncodeInt(5)
+	enc.EncodeUint(5)
+
+	err := Unmarshal(enc.Bytes(), &S{})
+	if !errors.Is(err, ErrUnexpectedItemCount) {
+		t.Errorf("unknown mid-range key: got %v, want ErrUnexpectedItemCount", err)
+	}
+}
+
+// Tests that a trailing unknown key within the expected range produces
+// ErrUnexpectedItemCount, consistent with mid-walk unknown key handling.
+func TestMapUnknownKeyTrailing(t *testing.T) {
+	type S struct {
+		A *uint64 `cbor:"1,key,optional"`
+		B uint64  `cbor:"3,key"`
+	}
+	// Wire: {3: 7, 2: 2} — key 2 is unknown, trailing after walk.
+	enc := NewEncoder()
+	enc.EncodeMapHeader(2)
+	enc.EncodeInt(3)
+	enc.EncodeUint(7)
+	enc.EncodeInt(2)
+	enc.EncodeUint(2)
+
+	err := Unmarshal(enc.Bytes(), &S{})
+	if !errors.Is(err, ErrUnexpectedItemCount) {
+		t.Errorf("trailing unknown key: got %v, want ErrUnexpectedItemCount", err)
+	}
+}
+
+// Tests that a non-integer trailing key surfaces the parse error rather
+// than being masked by a generic order/count error.
+func TestMapTrailingNonIntegerKey(t *testing.T) {
+	type S struct {
+		A *uint64 `cbor:"1,key,optional"`
+		B uint64  `cbor:"3,key"`
+	}
+	// Wire: map(2), key 3: uint 7, text "x": uint 2
+	// Field A (optional) is absent, B matches. The trailing text key "x"
+	// is unconsumed after the walk; PeekInt must surface the type error.
+	data := []byte{
+		0xa2,       // map(2)
+		0x03, 0x07, // key 3, uint 7
+		0x61, 0x78, 0x02, // text "x" (key), uint 2 (value)
+	}
+	err := Unmarshal(data, &S{})
+	if err == nil {
+		t.Fatal("expected error for non-integer trailing key, got nil")
+	}
+	// Must NOT be ErrInvalidMapKeyOrder or ErrUnexpectedItemCount —
+	// those would mask the real problem (non-integer key type).
+	if errors.Is(err, ErrInvalidMapKeyOrder) {
+		t.Errorf("got ErrInvalidMapKeyOrder, want type/parse error: %v", err)
+	}
+	if errors.Is(err, ErrUnexpectedItemCount) {
+		t.Errorf("got ErrUnexpectedItemCount, want type/parse error: %v", err)
 	}
 }
 
