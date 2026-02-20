@@ -279,8 +279,10 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 	}
 	// Handle pointer types specially - null decodes as nil pointer
 	if v.Kind() == reflect.Ptr {
-		// Option[T] handles null internally, so don't intercept it here
-		if !isOptionType(v.Type().Elem()) {
+		// Option[T] handles null internally, so don't intercept it here.
+		// Raw captures any CBOR value (including null) as raw bytes,
+		// so don't intercept null for *Raw either.
+		if !isOptionType(v.Type().Elem()) && v.Type().Elem() != reflect.TypeOf(Raw{}) {
 			if dec.PeekNull() {
 				if !optional {
 					return ErrUnexpectedNull

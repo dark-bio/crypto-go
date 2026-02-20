@@ -793,6 +793,28 @@ func TestRawDecoding(t *testing.T) {
 	if !bytes.Equal(decoded.Params, []byte{0x82, 0x01, 0x63, 0x61, 0x72, 0x67}) {
 		t.Errorf("Params: got %x, want 82016361726", decoded.Params)
 	}
+	// Null (regression: pointer-level null check previously short-circuited
+	// before reaching the Raw handler, causing Unmarshal into *Raw to fail)
+	raw = nil
+	if err := Unmarshal([]byte{0xf6}, &raw); err != nil {
+		t.Fatalf("Raw decode null error: %v", err)
+	}
+	if !bytes.Equal(raw, []byte{0xf6}) {
+		t.Errorf("Raw decode null: got %x, want f6", raw)
+	}
+	// Null embedded in an array-mode struct
+	type NullPayload struct {
+		_       struct{} `cbor:"_,array"`
+		Payload Raw
+	}
+	data = []byte{0x81, 0xf6} // [null]
+	var nullDecoded NullPayload
+	if err := Unmarshal(data, &nullDecoded); err != nil {
+		t.Fatalf("Unmarshal NullPayload error: %v", err)
+	}
+	if !bytes.Equal(nullDecoded.Payload, []byte{0xf6}) {
+		t.Errorf("NullPayload.Payload: got %x, want f6", nullDecoded.Payload)
+	}
 }
 
 // Tests that Raw rejects unsupported major types.
