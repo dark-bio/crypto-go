@@ -6,7 +6,7 @@
 
 // Package mldsa provides ML-DSA-65 digital signatures.
 //
-// https://datatracker.ietf.org/doc/html/draft-ietf-lamps-dilithium-certificates
+// https://datatracker.ietf.org/doc/html/rfc9881
 package mldsa
 
 import (
