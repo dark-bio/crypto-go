@@ -73,15 +73,15 @@ import (
 	"unicode/utf8"
 )
 
-// Supported CBOR major types
+// CBOR major types.
 const (
-	majorUint   = 0
-	majorNint   = 1
-	majorBytes  = 2
-	majorText   = 3
-	majorArray  = 4
-	majorMap    = 5
-	majorSimple = 7
+	MajorUint   = 0
+	MajorNint   = 1
+	MajorBytes  = 2
+	MajorText   = 3
+	MajorArray  = 4
+	MajorMap    = 5
+	MajorSimple = 7
 )
 
 // Additional info values
@@ -144,21 +144,21 @@ func (e *Encoder) Bytes() []byte {
 
 // EncodeUint encodes a positive integer into its canonical shortest-form.
 func (e *Encoder) EncodeUint(value uint64) {
-	e.encodeLength(majorUint, value)
+	e.encodeLength(MajorUint, value)
 }
 
 // EncodeInt encodes a signed integer into its canonical shortest-form.
 func (e *Encoder) EncodeInt(value int64) {
 	if value >= 0 {
-		e.encodeLength(majorUint, uint64(value))
+		e.encodeLength(MajorUint, uint64(value))
 	} else {
-		e.encodeLength(majorNint, uint64(-1-value))
+		e.encodeLength(MajorNint, uint64(-1-value))
 	}
 }
 
 // EncodeBytes encodes an opaque byte string.
 func (e *Encoder) EncodeBytes(value []byte) {
-	e.encodeLength(majorBytes, uint64(len(value)))
+	e.encodeLength(MajorBytes, uint64(len(value)))
 	e.buf = append(e.buf, value...)
 }
 
@@ -168,33 +168,33 @@ func (e *Encoder) EncodeText(value string) error {
 	if !utf8.ValidString(value) {
 		return ErrInvalidUTF8
 	}
-	e.encodeLength(majorText, uint64(len(value)))
+	e.encodeLength(MajorText, uint64(len(value)))
 	e.buf = append(e.buf, value...)
 	return nil
 }
 
 // EncodeArrayHeader encodes an array size.
 func (e *Encoder) EncodeArrayHeader(length int) {
-	e.encodeLength(majorArray, uint64(length))
+	e.encodeLength(MajorArray, uint64(length))
 }
 
 // EncodeMapHeader encodes a map size.
 func (e *Encoder) EncodeMapHeader(length int) {
-	e.encodeLength(majorMap, uint64(length))
+	e.encodeLength(MajorMap, uint64(length))
 }
 
 // EncodeBool encodes a CBOR boolean value.
 func (e *Encoder) EncodeBool(value bool) {
 	if value {
-		e.buf = append(e.buf, majorSimple<<5|simpleTrue)
+		e.buf = append(e.buf, MajorSimple<<5|simpleTrue)
 	} else {
-		e.buf = append(e.buf, majorSimple<<5|simpleFalse)
+		e.buf = append(e.buf, MajorSimple<<5|simpleFalse)
 	}
 }
 
 // EncodeNull encodes a CBOR null value.
 func (e *Encoder) EncodeNull() {
-	e.buf = append(e.buf, majorSimple<<5|simpleNull)
+	e.buf = append(e.buf, MajorSimple<<5|simpleNull)
 }
 
 // EncodeRaw appends pre-encoded CBOR bytes to the buffer.
@@ -248,8 +248,8 @@ func (d *Decoder) DecodeUint() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if major != majorUint {
-		return 0, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorUint)
+	if major != MajorUint {
+		return 0, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, MajorUint)
 	}
 	return value, nil
 }
@@ -261,18 +261,18 @@ func (d *Decoder) DecodeInt() (int64, error) {
 		return 0, err
 	}
 	switch major {
-	case majorUint:
+	case MajorUint:
 		if value > math.MaxInt64 {
 			return 0, fmt.Errorf("%w: positive %d exceeds max %d", ErrIntegerOverflow, value, uint64(math.MaxInt64))
 		}
 		return int64(value), nil
-	case majorNint:
+	case MajorNint:
 		if value > math.MaxInt64 {
 			return 0, fmt.Errorf("%w: negative %d exceeds max %d", ErrIntegerOverflow, value, uint64(math.MaxInt64))
 		}
 		return -1 - int64(value), nil
 	default:
-		return 0, fmt.Errorf("%w: %d, want %d or %d", ErrInvalidMajorType, major, majorUint, majorNint)
+		return 0, fmt.Errorf("%w: %d, want %d or %d", ErrInvalidMajorType, major, MajorUint, MajorNint)
 	}
 }
 
@@ -283,8 +283,8 @@ func (d *Decoder) DecodeBytes() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if major != majorBytes {
-		return nil, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorBytes)
+	if major != MajorBytes {
+		return nil, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, MajorBytes)
 	}
 	// Retrieve the blob and return as is
 	bytes, err := d.readBytes(length)
@@ -303,8 +303,8 @@ func (d *Decoder) DecodeBytesFixed(n int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	if major != majorBytes {
-		return nil, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorBytes)
+	if major != MajorBytes {
+		return nil, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, MajorBytes)
 	}
 	// Check that the length matches the expected array size
 	if int(length) != n {
@@ -327,8 +327,8 @@ func (d *Decoder) DecodeText() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if major != majorText {
-		return "", fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorText)
+	if major != MajorText {
+		return "", fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, MajorText)
 	}
 	// Retrieve the blob and reinterpret as UTF-8
 	bytes, err := d.readBytes(length)
@@ -348,8 +348,8 @@ func (d *Decoder) DecodeArrayHeader() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if major != majorArray {
-		return 0, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorArray)
+	if major != MajorArray {
+		return 0, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, MajorArray)
 	}
 	// Sanity check: each element needs at least 1 byte
 	remaining := uint64(len(d.data) - d.pos)
@@ -366,8 +366,8 @@ func (d *Decoder) DecodeMapHeader() (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if major != majorMap {
-		return 0, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, majorMap)
+	if major != MajorMap {
+		return 0, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, MajorMap)
 	}
 	// Sanity check: each key-value pair needs at least 2 bytes
 	remaining := uint64(len(d.data) - d.pos)
@@ -384,14 +384,14 @@ func (d *Decoder) DecodeBool() (bool, error) {
 	}
 	b := d.data[d.pos]
 	switch b {
-	case majorSimple<<5 | simpleFalse:
+	case MajorSimple<<5 | simpleFalse:
 		d.pos++
 		return false, nil
-	case majorSimple<<5 | simpleTrue:
+	case MajorSimple<<5 | simpleTrue:
 		d.pos++
 		return true, nil
 	default:
-		return false, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, b>>5, majorSimple)
+		return false, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, b>>5, MajorSimple)
 	}
 }
 
@@ -401,16 +401,24 @@ func (d *Decoder) DecodeNull() error {
 		return ErrUnexpectedEOF
 	}
 	b := d.data[d.pos]
-	if b != majorSimple<<5|simpleNull {
-		return fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, b>>5, majorSimple)
+	if b != MajorSimple<<5|simpleNull {
+		return fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, b>>5, MajorSimple)
 	}
 	d.pos++
 	return nil
 }
 
+// PeekMajor returns the CBOR major type of the next item without consuming it.
+func (d *Decoder) PeekMajor() (uint8, error) {
+	if d.pos >= len(d.data) {
+		return 0, ErrUnexpectedEOF
+	}
+	return d.data[d.pos] >> 5, nil
+}
+
 // PeekNull checks if the next value is null without consuming it.
 func (d *Decoder) PeekNull() bool {
-	return d.pos < len(d.data) && d.data[d.pos] == majorSimple<<5|simpleNull
+	return d.pos < len(d.data) && d.data[d.pos] == MajorSimple<<5|simpleNull
 }
 
 // PeekInt returns the next signed integer value without consuming it.
@@ -568,14 +576,14 @@ func skipObject(dec *Decoder, depth int) error {
 		return err
 	}
 	switch major {
-	case majorUint, majorNint:
+	case MajorUint, MajorNint:
 		return nil
 
-	case majorBytes, majorText:
+	case MajorBytes, MajorText:
 		_, err := dec.readBytes(value)
 		return err
 
-	case majorArray:
+	case MajorArray:
 		for range value {
 			if err := skipObject(dec, depth-1); err != nil {
 				return err
@@ -583,7 +591,7 @@ func skipObject(dec *Decoder, depth int) error {
 		}
 		return nil
 
-	case majorMap:
+	case MajorMap:
 		for range value {
 			if err := skipObject(dec, depth-1); err != nil {
 				return err
@@ -594,7 +602,7 @@ func skipObject(dec *Decoder, depth int) error {
 		}
 		return nil
 
-	case majorSimple:
+	case MajorSimple:
 		if value == simpleFalse || value == simpleTrue || value == simpleNull {
 			return nil
 		}
@@ -626,16 +634,16 @@ func verifyObject(dec *Decoder, depth int) error {
 		return err
 	}
 	switch major {
-	case majorUint, majorNint:
+	case MajorUint, MajorNint:
 		// Integers are valid (canonicalness was already verified in header decoding)
 		return nil
 
-	case majorBytes:
+	case MajorBytes:
 		// Opaque bytes are always valid, skip over
 		_, err := dec.readBytes(value)
 		return err
 
-	case majorText:
+	case MajorText:
 		// Verify that the text is indeed UTF-8
 		bytes, err := dec.readBytes(value)
 		if err != nil {
@@ -646,7 +654,7 @@ func verifyObject(dec *Decoder, depth int) error {
 		}
 		return nil
 
-	case majorArray:
+	case MajorArray:
 		for range value {
 			if err := verifyObject(dec, depth-1); err != nil {
 				return err
@@ -654,7 +662,7 @@ func verifyObject(dec *Decoder, depth int) error {
 		}
 		return nil
 
-	case majorMap:
+	case MajorMap:
 		var prevKey *int64
 		for range value {
 			key, err := dec.DecodeInt()
@@ -671,7 +679,7 @@ func verifyObject(dec *Decoder, depth int) error {
 		}
 		return nil
 
-	case majorSimple:
+	case MajorSimple:
 		if value == simpleFalse || value == simpleTrue || value == simpleNull {
 			return nil
 		}

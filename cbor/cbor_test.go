@@ -80,26 +80,26 @@ func TestUintRejection(t *testing.T) {
 	// Values 0-23 must use direct embedding
 	for value := uint64(0); value < 24; value++ {
 		// Should fail with infoUint8
-		data := []byte{majorUint<<5 | infoUint8, byte(value)}
+		data := []byte{MajorUint<<5 | infoUint8, byte(value)}
 		var got uint64
 		if err := Unmarshal(data, &got); err == nil {
 			t.Errorf("value %d with infoUint8 should fail", value)
 		}
 
 		// Should fail with infoUint16
-		data = []byte{majorUint<<5 | infoUint16, 0, byte(value)}
+		data = []byte{MajorUint<<5 | infoUint16, 0, byte(value)}
 		if err := Unmarshal(data, &got); err == nil {
 			t.Errorf("value %d with infoUint16 should fail", value)
 		}
 
 		// Should fail with infoUint32
-		data = []byte{majorUint<<5 | infoUint32, 0, 0, 0, byte(value)}
+		data = []byte{MajorUint<<5 | infoUint32, 0, 0, 0, byte(value)}
 		if err := Unmarshal(data, &got); err == nil {
 			t.Errorf("value %d with infoUint32 should fail", value)
 		}
 
 		// Should fail with infoUint64
-		data = []byte{majorUint<<5 | infoUint64, 0, 0, 0, 0, 0, 0, 0, byte(value)}
+		data = []byte{MajorUint<<5 | infoUint64, 0, 0, 0, 0, 0, 0, 0, byte(value)}
 		if err := Unmarshal(data, &got); err == nil {
 			t.Errorf("value %d with infoUint64 should fail", value)
 		}
@@ -110,19 +110,19 @@ func TestUintRejection(t *testing.T) {
 		var got uint64
 
 		// Should fail with infoUint16
-		data := []byte{majorUint<<5 | infoUint16, 0, byte(value)}
+		data := []byte{MajorUint<<5 | infoUint16, 0, byte(value)}
 		if err := Unmarshal(data, &got); err == nil {
 			t.Errorf("value %d with infoUint16 should fail", value)
 		}
 
 		// Should fail with infoUint32
-		data = []byte{majorUint<<5 | infoUint32, 0, 0, 0, byte(value)}
+		data = []byte{MajorUint<<5 | infoUint32, 0, 0, 0, byte(value)}
 		if err := Unmarshal(data, &got); err == nil {
 			t.Errorf("value %d with infoUint32 should fail", value)
 		}
 
 		// Should fail with infoUint64
-		data = []byte{majorUint<<5 | infoUint64, 0, 0, 0, 0, 0, 0, 0, byte(value)}
+		data = []byte{MajorUint<<5 | infoUint64, 0, 0, 0, 0, 0, 0, 0, byte(value)}
 		if err := Unmarshal(data, &got); err == nil {
 			t.Errorf("value %d with infoUint64 should fail", value)
 		}
@@ -133,13 +133,13 @@ func TestUintRejection(t *testing.T) {
 		var got uint64
 
 		// Should fail with infoUint32
-		data := []byte{majorUint<<5 | infoUint32, 0, 0, byte(value >> 8), byte(value)}
+		data := []byte{MajorUint<<5 | infoUint32, 0, 0, byte(value >> 8), byte(value)}
 		if err := Unmarshal(data, &got); err == nil {
 			t.Errorf("value %d with infoUint32 should fail", value)
 		}
 
 		// Should fail with infoUint64
-		data = []byte{majorUint<<5 | infoUint64, 0, 0, 0, 0, 0, 0, byte(value >> 8), byte(value)}
+		data = []byte{MajorUint<<5 | infoUint64, 0, 0, 0, 0, 0, 0, byte(value >> 8), byte(value)}
 		if err := Unmarshal(data, &got); err == nil {
 			t.Errorf("value %d with infoUint64 should fail", value)
 		}
@@ -150,7 +150,7 @@ func TestUintRejection(t *testing.T) {
 		var got uint64
 
 		// Should fail with infoUint64
-		data := []byte{majorUint<<5 | infoUint64, 0, 0, 0, 0, byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)}
+		data := []byte{MajorUint<<5 | infoUint64, 0, 0, 0, 0, byte(value >> 24), byte(value >> 16), byte(value >> 8), byte(value)}
 		if err := Unmarshal(data, &got); err == nil {
 			t.Errorf("value %d with infoUint64 should fail", value)
 		}
@@ -222,7 +222,7 @@ func TestIntDecoding(t *testing.T) {
 // Tests that signed integers are rejected for overflow conditions.
 func TestIntRejection(t *testing.T) {
 	// Positive value > i64::MAX (major type 0 with value i64::MAX + 1)
-	data := []byte{majorUint<<5 | infoUint64, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	data := []byte{MajorUint<<5 | infoUint64, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 	var got int64
 	err := Unmarshal(data, &got)
 	if err == nil {
@@ -232,7 +232,7 @@ func TestIntRejection(t *testing.T) {
 	}
 
 	// Negative value < i64::MIN (major type 1 with wire value > i64::MAX)
-	data = []byte{majorNint<<5 | infoUint64, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	data = []byte{MajorNint<<5 | infoUint64, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 	err = Unmarshal(data, &got)
 	if err == nil {
 		t.Error("negative overflow should fail")
@@ -241,7 +241,7 @@ func TestIntRejection(t *testing.T) {
 	}
 
 	// Non-canonical negative integer encoding
-	data = []byte{majorNint<<5 | infoUint8, 0x10} // -17 with infoUint8
+	data = []byte{MajorNint<<5 | infoUint8, 0x10} // -17 with infoUint8
 	err = Unmarshal(data, &got)
 	if err == nil {
 		t.Error("non-canonical encoding should fail")
@@ -862,12 +862,12 @@ func TestVerify(t *testing.T) {
 	}
 
 	// Large integers are valid at verify time (overflow is checked at decode)
-	largeUint := append([]byte{majorUint<<5 | infoUint64}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}...)
+	largeUint := append([]byte{MajorUint<<5 | infoUint64}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}...)
 	if err := Verify(largeUint); err != nil {
 		t.Errorf("Verify large uint should pass, got %v", err)
 	}
 
-	largeNint := append([]byte{majorNint<<5 | infoUint64}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}...)
+	largeNint := append([]byte{MajorNint<<5 | infoUint64}, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}...)
 	if err := Verify(largeNint); err != nil {
 		t.Errorf("Verify large nint should pass, got %v", err)
 	}

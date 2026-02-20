@@ -28,15 +28,15 @@ import (
 // from an app layer action.
 const DomainPrefix = "dark-bio-v1:"
 
-// algorithm identifiers for COSE operations
+// Private COSE algorithm / key-type identifiers.
 const (
-	// algorithmXDSA is the private COSE algorithm identifier for composite
-	// ML-DSA-65 + Ed25519 signatures.
-	algorithmXDSA = -70000
+	// AlgorithmXDSA is the private COSE algorithm identifier for composite
+	// ML-DSA-65 + Ed25519 signatures. Also used as the COSE key type (kty).
+	AlgorithmXDSA = -70000
 
-	// algorithmXHPKE is the private COSE algorithm identifier for X-Wing
-	// (ML-KEM-768 + X25519) HPKE.
-	algorithmXHPKE = -70001
+	// AlgorithmXHPKE is the private COSE algorithm identifier for X-Wing
+	// (ML-KEM-768 + X25519) HPKE. Also used as the COSE key type (kty).
+	AlgorithmXHPKE = -70001
 
 	// HeaderTimestamp is the private COSE header label for Unix timestamp.
 	HeaderTimestamp = -70002
@@ -231,7 +231,7 @@ func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, tim
 	}
 	// Build protected header
 	protected, err := cbor.Marshal(&sigProtectedHeader{
-		Algorithm: algorithmXDSA,
+		Algorithm: AlgorithmXDSA,
 		Crit:      critHeader{Timestamp: HeaderTimestamp},
 		Kid:       signer.PublicKey().Fingerprint(),
 		Timestamp: timestamp,
@@ -279,7 +279,7 @@ func signDetachedAt(msgToAuth []byte, signer xdsa.Signer, domain []byte, timesta
 	}
 	// Build protected header
 	protected, err := cbor.Marshal(&sigProtectedHeader{
-		Algorithm: algorithmXDSA,
+		Algorithm: AlgorithmXDSA,
 		Crit:      critHeader{Timestamp: HeaderTimestamp},
 		Kid:       signer.PublicKey().Fingerprint(),
 		Timestamp: timestamp,
@@ -366,7 +366,7 @@ func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, doma
 		return ErrUnexpectedPayload
 	}
 	// Verify the protected header
-	header, err := verifySigProtectedHeader(sign1.Protected, algorithmXDSA, verifier)
+	header, err := verifySigProtectedHeader(sign1.Protected, AlgorithmXDSA, verifier)
 	if err != nil {
 		return err
 	}
@@ -462,7 +462,7 @@ func verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byt
 		return nil, ErrMissingPayload
 	}
 	// Verify the protected header
-	header, err := verifySigProtectedHeader(sign1.Protected, algorithmXDSA, verifier)
+	header, err := verifySigProtectedHeader(sign1.Protected, AlgorithmXDSA, verifier)
 	if err != nil {
 		return nil, err
 	}
@@ -519,7 +519,8 @@ func Signer(signature []byte) (xdsa.Fingerprint, error) {
 //
 // Warning: This function does NOT verify the signature. The returned payload
 // is unauthenticated and should not be trusted until verified with Verify.
-// Use Signer to extract the signer's fingerprint for key lookup.
+// Use Signer to extract the signer's fingerprint for key lookup. The single
+// case for this method is self-signed key discovery.
 //
 //   - signature: The serialized COSE_Sign1 structure
 //
@@ -603,7 +604,7 @@ func Encrypt(sign1 []byte, msgToAuth any, recipient *xhpke.PublicKey, domain []b
 	}
 	// Build protected header with recipient's fingerprint
 	protected, err := cbor.Marshal(&encProtectedHeader{
-		Algorithm: algorithmXHPKE,
+		Algorithm: AlgorithmXHPKE,
 		Kid:       recipient.Fingerprint(),
 	})
 	if err != nil {
@@ -709,7 +710,7 @@ func Decrypt(msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, domain
 		return nil, err
 	}
 	// Verify protected header
-	if err := verifyEncProtectedHeader(encrypt0.Protected, algorithmXHPKE, recipient); err != nil {
+	if err := verifyEncProtectedHeader(encrypt0.Protected, AlgorithmXHPKE, recipient); err != nil {
 		return nil, err
 	}
 	// Extract encapsulated key from the unprotected headers

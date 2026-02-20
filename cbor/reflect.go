@@ -36,10 +36,15 @@ type Unmarshaler interface {
 //   - types implementing Marshaler: custom CBOR encoding
 func Marshal(v any) ([]byte, error) {
 	enc := NewEncoder()
-	if err := encodeValue(enc, reflect.ValueOf(v), false); err != nil {
+	if err := enc.Encode(v); err != nil {
 		return nil, err
 	}
 	return enc.Bytes(), nil
+}
+
+// Encode appends a value to the encoder's buffer using reflection.
+func (enc *Encoder) Encode(v any) error {
+	return encodeValue(enc, reflect.ValueOf(v), false)
 }
 
 // Unit is a special type that encodes as an empty CBOR array, matching Rust's () unit type.
@@ -245,10 +250,15 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 // Unmarshal decodes CBOR data into a value. v must be a pointer.
 func Unmarshal(data []byte, v any) error {
 	dec := NewDecoder(data)
-	if err := decodeValue(dec, reflect.ValueOf(v), false); err != nil {
+	if err := dec.Decode(v); err != nil {
 		return err
 	}
 	return dec.Finish()
+}
+
+// Decode reads a value from the decoder using reflection.
+func (dec *Decoder) Decode(v any) error {
+	return decodeValue(dec, reflect.ValueOf(v), false)
 }
 
 // decodeValue recursively decodes CBOR into a reflect.Value.
