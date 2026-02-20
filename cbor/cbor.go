@@ -61,7 +61,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 	"unicode/utf8"
 )
 
@@ -111,6 +110,7 @@ var (
 	ErrIntegerOverflow       = errors.New("integer overflow")
 	ErrDuplicateMapKey       = errors.New("duplicate map key")
 	ErrInvalidMapKeyOrder    = errors.New("invalid map key order")
+	ErrMissingMapKey         = errors.New("missing required map key")
 	ErrUnexpectedNil         = errors.New("unexpected nil value (field not marked optional)")
 	ErrUnexpectedNull        = errors.New("unexpected null value (field not marked optional)")
 	ErrMaxDepthExceeded      = errors.New("nesting depth exceeds maximum")
@@ -506,16 +506,36 @@ func (d *Decoder) readBytes(n uint64) ([]byte, error) {
 // mapKeyCmp compares two int64 keys according to CBOR deterministic encoding
 // order (RFC 8949 Section 4.2.1): bytewise lexicographic order of encoded keys.
 //
-// For integers this means: positive integers (0, 1, 2, ...) come before negative
-// integers (-1, -2, -3, ...), and within each category they're ordered by their
-// encoded length first, then by value.
+// For integers this means: non-negative integers (major type 0) come before
+// negative integers (major type 1). Within each sign, CBOR encodes the
+// magnitude in shortest form, so bytewise order equals numeric magnitude order.
 func mapKeyCmp(a, b int64) int {
-	encodeKey := func(k int64) []byte {
-		enc := NewEncoder()
-		enc.EncodeInt(k)
-		return enc.Bytes()
+	aNeg, bNeg := a < 0, b < 0
+	if aNeg != bNeg {
+		if aNeg {
+			return 1 // a negative, b non-negative → b first
+		}
+		return -1 // a non-negative, b negative → a first
 	}
-	return slices.Compare(encodeKey(a), encodeKey(b))
+	if !aNeg {
+		// Both non-negative: CBOR encoding is monotonically increasing.
+		if a < b {
+			return -1
+		}
+		if a > b {
+			return 1
+		}
+		return 0
+	}
+	// Both negative: CBOR encodes -(n+1), so smaller magnitude sorts first.
+	ua, ub := uint64(-(a + 1)), uint64(-(b + 1))
+	if ua < ub {
+		return -1
+	}
+	if ua > ub {
+		return 1
+	}
+	return 0
 }
 
 // Raw is a placeholder type to allow only partially parsing CBOR objects when

@@ -181,7 +181,7 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 			return nil
 		}
 		// Check for tomap tag - fields must have key tags
-		mFields, err := mapFields(t)
+		mFields, _, _, err := mapFields(t)
 		if err != nil {
 			return err
 		}
@@ -194,10 +194,14 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 		})
 		// Count non-nil optional fields to determine the map header size.
 		// Optional fields that are nil/None are omitted entirely.
+		// Pointer embed fields whose embed pointer is nil are also omitted.
 		count := 0
 		for _, mf := range mFields {
 			fv, err := fieldByIndex(v, mf.field.Index, false)
 			if err != nil {
+				if mf.ptrGroup > 0 && err == ErrUnexpectedNil {
+					continue // nil pointer embed → field absent
+				}
 				return err
 			}
 			if !mf.optional || !isOptionalNil(fv) {
@@ -208,6 +212,9 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 		for _, mf := range mFields {
 			fv, err := fieldByIndex(v, mf.field.Index, false)
 			if err != nil {
+				if mf.ptrGroup > 0 && err == ErrUnexpectedNil {
+					continue // nil pointer embed → field absent
+				}
 				return err
 			}
 			if mf.optional && isOptionalNil(fv) {
@@ -418,7 +425,7 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 			return nil
 		}
 		// Must be a tomap struct - fields have key tags
-		mFields, err := mapFields(t)
+		mFields, parents, embeds, err := mapFields(t)
 		if err != nil {
 			return err
 		}
@@ -439,9 +446,11 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		}
 		// Walk expected keys in sorted order against actual map entries.
 		// Optional fields with missing keys default to zero value; required
-		// fields must be present.
+		// fields must be present. Pointer embed fields are deferred — they
+		// allow missing keys during the walk but validate all-or-none after.
 		remaining := int(length)
-		for _, mf := range mFields {
+		decoded := make([]bool, len(mFields))
+		for idx, mf := range mFields {
 			if remaining > 0 {
 				nextKey, err := dec.PeekInt()
 				if err != nil {
@@ -462,17 +471,113 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 					if err := decodeValue(dec, fv, mf.optional); err != nil {
 						return err
 					}
+					decoded[idx] = true
 					continue
 				}
+				// Wire key doesn't match and is less than expected. All
+				// expected keys below mf.key have been processed, so
+				// this key is either known-but-out-of-order or unknown.
+				if mapKeyCmp(nextKey, mf.key) < 0 {
+					duplicate := false
+					known := false
+					for j, mf2 := range mFields {
+						if mf2.key == nextKey {
+							known = true
+							duplicate = decoded[j]
+							break
+						}
+					}
+					if duplicate {
+						return fmt.Errorf("%w: key %d", ErrDuplicateMapKey, nextKey)
+					}
+					if known {
+						return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, nextKey, mf.key)
+					}
+					return fmt.Errorf("%w: %d, want at most %d", ErrUnexpectedItemCount, length, len(mFields))
+				}
+				// Wire key > expected: field is absent from wire data.
 			}
-			// Key not present in the map
-			if !mf.optional {
-				return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, 0, mf.key)
+			// Key not present (no more wire keys or wire key is past this field)
+			if !mf.optional && mf.ptrGroup == 0 {
+				return fmt.Errorf("%w: key %d", ErrMissingMapKey, mf.key)
 			}
-			// Optional field missing: leave as zero value
+			// Optional field missing: zero to clear stale data from reused
+			// destinations. ptrGroup fields are handled by the embed pointer
+			// cleanup after validation.
+			if mf.optional {
+				if fv, err := fieldByIndex(v, mf.field.Index, false); err == nil {
+					fv.Set(reflect.Zero(fv.Type()))
+				}
+			}
 		}
 		if remaining != 0 {
-			return fmt.Errorf("%w: %d, want at most %d", ErrUnexpectedItemCount, length, int(length)-remaining)
+			// Unconsumed wire keys. Check for duplicate, out-of-order,
+			// or unknown keys.
+			nextKey, err := dec.PeekInt()
+			if err != nil {
+				return err
+			}
+			if mapKeyCmp(nextKey, mFields[len(mFields)-1].key) <= 0 {
+				duplicate := false
+				known := false
+				for j, mf2 := range mFields {
+					if mf2.key == nextKey {
+						known = true
+						duplicate = decoded[j]
+						break
+					}
+				}
+				if duplicate {
+					return fmt.Errorf("%w: key %d", ErrDuplicateMapKey, nextKey)
+				}
+				if known {
+					return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, nextKey, mFields[len(mFields)-1].key)
+				}
+			}
+			return fmt.Errorf("%w: %d, want at most %d", ErrUnexpectedItemCount, length, len(mFields))
+		}
+		// Validate pointer embed all-or-none: if any key from a pointer
+		// embed group was decoded, all non-optional keys in that group
+		// must also have been decoded. Uses only decode-time state (the
+		// decoded slice), not destination pointer values.
+		//
+		// For nested pointer embeds (*A containing *B), activity in an
+		// inner group must propagate to outer groups via the parent
+		// hierarchy. Without propagation, decoding a key from *B would
+		// not activate *A's group, letting *A's required keys slip by.
+		activeGroups := make(map[int]bool)
+		for idx, mf := range mFields {
+			if mf.ptrGroup > 0 && decoded[idx] {
+				activeGroups[mf.ptrGroup] = true
+			}
+		}
+		// Propagate activity upward through the parent chain.
+		for g := range activeGroups {
+			for p, ok := parents[g]; ok; p, ok = parents[p] {
+				activeGroups[p] = true
+			}
+		}
+		for idx, mf := range mFields {
+			if mf.ptrGroup == 0 || decoded[idx] || mf.optional {
+				continue
+			}
+			if activeGroups[mf.ptrGroup] {
+				return fmt.Errorf("%w: key %d required (pointer embed has other keys present)", ErrMissingMapKey, mf.key)
+			}
+		}
+		// Nil out embed pointers for inactive groups so that reused
+		// destinations don't retain stale data from a previous decode.
+		for group, embedIdx := range embeds {
+			if activeGroups[group] {
+				continue
+			}
+			pv, err := fieldByIndex(v, embedIdx, false)
+			if err != nil {
+				continue // parent pointer already nil
+			}
+			if pv.Kind() == reflect.Ptr && !pv.IsNil() {
+				pv.Set(reflect.Zero(pv.Type()))
+			}
 		}
 		return nil
 
@@ -516,31 +621,44 @@ type fieldInfo struct {
 	field    reflect.StructField
 	key      int64
 	optional bool
+	ptrGroup int // >0: field belongs to pointer embed group N (nil = all fields absent)
+}
+
+// ptrGroupState tracks pointer embed group IDs and their parent hierarchy
+// during field collection. Groups form a tree: when *A contains *B, B's
+// group is a child of A's group.
+type ptrGroupState struct {
+	nextID  int
+	parents map[int]int   // child group → parent group; absent = no parent
+	embeds  map[int][]int // group → field index path to the embed pointer
 }
 
 // mapFields extracts fields with cbor:"N,key" tags from a struct type,
-// recursing into anonymous (embedded) struct fields. Returns an error if
-// a field has an invalid key tag or duplicate keys exist across fields.
-func mapFields(t reflect.Type) ([]fieldInfo, error) {
-	fields, err := collectMapFields(t, nil)
+// recursing into anonymous (embedded) struct fields. Returns field info,
+// the pointer embed group parent hierarchy (child → parent), the embed
+// pointer field-index map (group → index path), and any error.
+func mapFields(t reflect.Type) ([]fieldInfo, map[int]int, map[int][]int, error) {
+	gs := &ptrGroupState{parents: make(map[int]int), embeds: make(map[int][]int)}
+	fields, err := collectMapFields(t, nil, gs, map[reflect.Type]bool{t: true})
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	// Detect duplicate keys across all fields (including embedded)
 	seen := make(map[int64]string)
 	for _, f := range fields {
 		if prev, ok := seen[f.key]; ok {
-			return nil, fmt.Errorf("%w: duplicate CBOR key %d (fields %s and %s)", ErrUnsupportedType, f.key, prev, f.field.Name)
+			return nil, nil, nil, fmt.Errorf("%w: duplicate CBOR key %d (fields %s and %s)", ErrUnsupportedType, f.key, prev, f.field.Name)
 		}
 		seen[f.key] = f.field.Name
 	}
-	return fields, nil
+	return fields, gs.parents, gs.embeds, nil
 }
 
 // collectMapFields recursively collects fields with cbor:"N,key" tags,
 // following anonymous (embedded) struct fields. prefix is the field index
-// path from the top-level struct to the current type.
-func collectMapFields(t reflect.Type, prefix []int) ([]fieldInfo, error) {
+// path from the top-level struct to the current type. visited tracks
+// types already being collected to detect self-referential embeds.
+func collectMapFields(t reflect.Type, prefix []int, gs *ptrGroupState, visited map[reflect.Type]bool) ([]fieldInfo, error) {
 	var fields []fieldInfo
 	for i := range t.NumField() {
 		f := t.Field(i)
@@ -555,15 +673,47 @@ func collectMapFields(t reflect.Type, prefix []int) ([]fieldInfo, error) {
 				if !ok {
 					continue
 				}
+				if visited[embedType] {
+					return nil, fmt.Errorf("%w: recursive embed %s", ErrUnsupportedType, embedType.Name())
+				}
+				if wantArray(embedType) {
+					return nil, fmt.Errorf("%w: embedded field %s is array-mode", ErrUnsupportedType, f.Name)
+				}
+				visited[embedType] = true
 				inner := make([]int, len(prefix)+1)
 				copy(inner, prefix)
 				inner[len(prefix)] = i
-				sub, err := collectMapFields(embedType, inner)
+				prevID := gs.nextID
+				sub, err := collectMapFields(embedType, inner, gs, visited)
+				delete(visited, embedType)
 				if err != nil {
 					return nil, err
 				}
 				if len(sub) == 0 && len(structFields(embedType)) > 0 {
 					return nil, fmt.Errorf("%w: embedded field %s has no CBOR map keys", ErrUnsupportedType, f.Name)
+				}
+				// Pointer embeds (*T): nil pointer = all fields absent.
+				// Assign a group ID so decode can validate all-or-none.
+				// Only set the group on fields that don't already belong
+				// to a deeper (inner) pointer embed group. Inner groups
+				// created during the recursive call become children of
+				// this group in the hierarchy.
+				if f.Type.Kind() == reflect.Ptr {
+					gs.nextID++
+					group := gs.nextID
+					embedIdx := make([]int, len(inner))
+					copy(embedIdx, inner)
+					gs.embeds[group] = embedIdx
+					for childID := prevID + 1; childID < group; childID++ {
+						if _, ok := gs.parents[childID]; !ok {
+							gs.parents[childID] = group
+						}
+					}
+					for j := range sub {
+						if sub[j].ptrGroup == 0 {
+							sub[j].ptrGroup = group
+						}
+					}
 				}
 				fields = append(fields, sub...)
 			}
