@@ -236,7 +236,7 @@ func TestVerifyWrongDomain(t *testing.T) {
 	}
 }
 
-// TestVerifyBoundaryExact tests that now == nbf and now == exp both pass.
+// TestVerifyBoundaryExact tests that now == nbf passes and now == exp fails per RFC 8392.
 func TestVerifyBoundaryExact(t *testing.T) {
 	issuer := xdsa.GenerateKey()
 
@@ -254,9 +254,9 @@ func TestVerifyBoundaryExact(t *testing.T) {
 	if _, err := Verify[simpleCert](token, issuer.PublicKey(), "test", ptr(1000000)); err != nil {
 		t.Fatalf("now == nbf should pass: %v", err)
 	}
-	// now == exp should pass
-	if _, err := Verify[simpleCert](token, issuer.PublicKey(), "test", ptr(2000000)); err != nil {
-		t.Fatalf("now == exp should pass: %v", err)
+	// now == exp should fail (exp is "on or after which the token MUST NOT be accepted")
+	if _, err := Verify[simpleCert](token, issuer.PublicKey(), "test", ptr(2000000)); !errors.Is(err, ErrAlreadyExpired) {
+		t.Fatalf("now == exp should fail with ErrAlreadyExpired, got %v", err)
 	}
 }
 

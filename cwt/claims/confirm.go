@@ -119,7 +119,9 @@ type cnfMap struct {
 	CoseKey coseKey `cbor:"1,key"`
 }
 
-// coseKey is a minimal COSE_Key: { 1: kty, -2: x }.
+// coseKey is a minimal COSE_Key: { 1: kty, -2: x }. Parameter -2 carries
+// the full public key bytes, following the OKP convention (RFC 9053 Section 7.2)
+// where -2 means "public key" rather than the EC2 "x-coordinate" meaning.
 type coseKey struct {
 	Kty int64  `cbor:"1,key"`
 	X   []byte `cbor:"-2,key"`

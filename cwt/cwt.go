@@ -75,7 +75,7 @@ func Verify[T any](data []byte, verifier *xdsa.PublicKey, domain string, now *ui
 		if *now < nbf {
 			return nil, fmt.Errorf("%w: nbf %d > now %d", ErrNotYetValid, nbf, *now)
 		}
-		if exp != nil && *now > *exp {
+		if exp != nil && *now >= *exp {
 			return nil, fmt.Errorf("%w: exp %d < now %d", ErrAlreadyExpired, *exp, *now)
 		}
 	}
