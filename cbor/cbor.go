@@ -12,14 +12,14 @@
 //
 // Only a minimal subset of CBOR is supported:
 //
-//   - Booleans:     bool
-//   - Integers:     uint64, int64
-//   - Text:         string
-//   - Bytes:        []byte, [N]byte
-//   - Null:         cbor.Null, cbor.Option[T]{Some: false}
-//   - Arrays:       structs tagged cbor:"_,array" (fields encoded in declaration order)
-//   - Maps:         structs with cbor:"N,key" fields (integer keys, deterministic order)
-//   - Raw:          cbor.Raw (opaque CBOR bytes, passed through without parsing)
+//   - Booleans: bool
+//   - Integers: uint64, int64
+//   - Text:     string
+//   - Bytes:    []byte, [N]byte
+//   - Null:     cbor.Null, cbor.Option[T]{Some: false}
+//   - Arrays:   structs tagged cbor:"_,array" (fields encoded in declaration order)
+//   - Maps:     structs with cbor:"N,key" fields (integer keys, deterministic order)
+//   - Raw:      cbor.Raw (opaque CBOR bytes, passed through without parsing)
 //
 // # Struct tags
 //
@@ -34,9 +34,9 @@
 // Map mode — fields encode as key-value pairs sorted by CBOR key bytes:
 //
 //	type Bar struct {
-//	    X uint64          `cbor:"1,key"`            // required
-//	    Y []byte          `cbor:"2,key,optional"`   // omitted when nil
-//	    Z Option[uint64]  `cbor:"3,key"`            // nullable: always present, value or null
+//	    X uint64          `cbor:"1,key"`          // required
+//	    Y []byte          `cbor:"2,key,optional"` // omitted when nil
+//	    Z Option[uint64]  `cbor:"3,key"`          // nullable: always present, value or null
 //	}
 //
 // # Embedding
@@ -44,9 +44,18 @@
 // Anonymous struct fields are flattened into the parent map. The embedded struct
 // must itself be map-mode. Keys across all embeds and direct fields must not overlap.
 //
-//	type Token struct {
-//	    Identity              // flattened: keys from Identity merge into Token
-//	    Aud string `cbor:"3,key"`
+//	type Outer struct {
+//	    Inner                   // flattened: keys from Inner merge into Outer
+//	    C uint64 `cbor:"3,key"`
+//	}
+//
+// Pointer embeds (*T) use all-or-none semantics: either every required key from
+// the embedded struct is present (non-nil), or none are (nil). Partial presence
+// is rejected.
+//
+//	type Outer struct {
+//	    *Extra                  // all Extra keys present, or none
+//	    C uint64 `cbor:"3,key"`
 //	}
 //
 // # Encoding rules
