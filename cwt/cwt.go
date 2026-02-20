@@ -40,6 +40,7 @@ var (
 	ErrMissingNbf     = errors.New("cwt: missing nbf claim")
 	ErrNotYetValid    = errors.New("cwt: token not yet valid")
 	ErrAlreadyExpired = errors.New("cwt: token already expired")
+	ErrDuplicateKey   = errors.New("cwt: duplicate claim key")
 )
 
 // Issue signs a set of claims as a CWT using COSE Sign1.
@@ -58,7 +59,7 @@ func Issue(claims any, signer xdsa.Signer, domain string) ([]byte, error) {
 // the claims into T.
 //
 // When now is non-nil, temporal claims are validated: nbf (key 5) must be present
-// and nbf <= *now, and if exp (key 4) is present then *now <= exp. When now is nil,
+// and nbf <= *now, and if exp (key 4) is present then *now < exp. When now is nil,
 // temporal validation is skipped entirely.
 func Verify[T any](data []byte, verifier *xdsa.PublicKey, domain string, now *uint64) (*T, error) {
 	// Verify COSE signature (skip COSE drift check — CWT handles temporal validation)
@@ -76,7 +77,7 @@ func Verify[T any](data []byte, verifier *xdsa.PublicKey, domain string, now *ui
 			return nil, fmt.Errorf("%w: nbf %d > now %d", ErrNotYetValid, nbf, *now)
 		}
 		if exp != nil && *now >= *exp {
-			return nil, fmt.Errorf("%w: exp %d < now %d", ErrAlreadyExpired, *exp, *now)
+			return nil, fmt.Errorf("%w: exp %d <= now %d", ErrAlreadyExpired, *exp, *now)
 		}
 	}
 	// Decode claims into T
@@ -127,14 +128,20 @@ func readTemporalClaims(raw cbor.Raw) (nbf uint64, exp *uint64, err error) {
 			return 0, nil, err
 		}
 		switch key {
-		case 4: // exp
+		case 4: // exp (reject duplicates)
+			if exp != nil {
+				return 0, nil, fmt.Errorf("%w: %d", ErrDuplicateKey, key)
+			}
 			val, err := dec.DecodeUint()
 			if err != nil {
 				return 0, nil, err
 			}
 			exp = &val
 
-		case 5: // nbf
+		case 5: // nbf (reject duplicates)
+			if foundNbf {
+				return 0, nil, fmt.Errorf("%w: %d", ErrDuplicateKey, key)
+			}
 			val, err := dec.DecodeUint()
 			if err != nil {
 				return 0, nil, err

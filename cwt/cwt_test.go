@@ -10,6 +10,8 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/dark-bio/crypto-go/cbor"
+	"github.com/dark-bio/crypto-go/cose"
 	"github.com/dark-bio/crypto-go/cwt/claims"
 	"github.com/dark-bio/crypto-go/cwt/claims/eat"
 	"github.com/dark-bio/crypto-go/xdsa"
@@ -281,5 +283,33 @@ func TestVerifyNoExpiration(t *testing.T) {
 	// Should pass even far in the future since there's no exp
 	if _, err := Verify[noExp](token, issuer.PublicKey(), "test", ptr(99999999)); err != nil {
 		t.Fatalf("no exp should pass: %v", err)
+	}
+}
+
+// TestVerifyDuplicateNbf tests that duplicate temporal claim keys are rejected.
+func TestVerifyDuplicateNbf(t *testing.T) {
+	issuer := xdsa.GenerateKey()
+
+	// Manually construct a CBOR map with duplicate nbf (key 5)
+	enc := cbor.NewEncoder()
+	enc.EncodeMapHeader(3)
+	enc.EncodeInt(2)
+	if err := enc.EncodeText("test"); err != nil {
+		t.Fatalf("encode text: %v", err)
+	}
+	enc.EncodeInt(5)
+	enc.EncodeUint(1000000)
+	enc.EncodeInt(5) // duplicate nbf
+	enc.EncodeUint(2000000)
+
+	// Sign the raw payload via COSE (bypassing CWT's encoder)
+	token, err := cose.Sign(cbor.Raw(enc.Bytes()), cbor.Null{}, issuer, []byte("test"))
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	// Verify should fail with ErrDuplicateKey before claims decoding
+	_, err = Verify[simpleCert](token, issuer.PublicKey(), "test", ptr(1500000))
+	if !errors.Is(err, ErrDuplicateKey) {
+		t.Fatalf("expected ErrDuplicateKey, got %v", err)
 	}
 }

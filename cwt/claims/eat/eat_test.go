@@ -194,6 +194,36 @@ func TestSimpleClaims(t *testing.T) {
 	}
 }
 
+// TestDebugStateInvalid tests that an out-of-range debug state is rejected.
+func TestDebugStateInvalid(t *testing.T) {
+	enc := cbor.NewEncoder()
+	enc.EncodeMapHeader(1)
+	enc.EncodeInt(263)
+	enc.EncodeUint(99) // not in 0..4
+
+	type token struct{ DebugStatus }
+	var got token
+	err := cbor.Unmarshal(enc.Bytes(), &got)
+	if !errors.Is(err, ErrInvalidDebugState) {
+		t.Fatalf("expected ErrInvalidDebugState, got %v", err)
+	}
+}
+
+// TestUseInvalid tests that an out-of-range intended use is rejected.
+func TestUseInvalid(t *testing.T) {
+	enc := cbor.NewEncoder()
+	enc.EncodeMapHeader(1)
+	enc.EncodeInt(275)
+	enc.EncodeUint(0) // not in 1..5
+
+	type token struct{ IntendedUse }
+	var got token
+	err := cbor.Unmarshal(enc.Bytes(), &got)
+	if !errors.Is(err, ErrInvalidUse) {
+		t.Fatalf("expected ErrInvalidUse, got %v", err)
+	}
+}
+
 // TestOEMIDInvalidLength tests that a byte string of invalid length is rejected.
 func TestOEMIDInvalidLength(t *testing.T) {
 	enc := cbor.NewEncoder()

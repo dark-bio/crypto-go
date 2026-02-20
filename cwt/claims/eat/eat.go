@@ -9,6 +9,19 @@
 // https://datatracker.ietf.org/doc/html/rfc9711
 package eat
 
+import (
+	"errors"
+	"fmt"
+
+	"github.com/dark-bio/crypto-go/cbor"
+)
+
+// Errors returned by EAT claim operations.
+var (
+	ErrInvalidDebugState = errors.New("eat: invalid debug state")
+	ErrInvalidUse        = errors.New("eat: invalid intended use")
+)
+
 // UEID is a globally unique device identifier such as a serial number
 // or IMEI (key 256). The value is an opaque byte string including a
 // type prefix byte per RFC 9711 Section 4.2.1.
@@ -43,6 +56,25 @@ const (
 	DebugDisabledFullyPermanently DebugState = 4 // All debug, including DMA-based, is permanently disabled
 )
 
+// MarshalCBOR implements cbor.Marshaler.
+func (s *DebugState) MarshalCBOR(enc *cbor.Encoder) error {
+	enc.EncodeUint(uint64(*s))
+	return nil
+}
+
+// UnmarshalCBOR implements cbor.Unmarshaler.
+func (s *DebugState) UnmarshalCBOR(dec *cbor.Decoder) error {
+	v, err := dec.DecodeUint()
+	if err != nil {
+		return err
+	}
+	if v > 4 {
+		return fmt.Errorf("%w: %d", ErrInvalidDebugState, v)
+	}
+	*s = DebugState(v)
+	return nil
+}
+
 // DebugStatus is the debug port state (key 263).
 type DebugStatus struct {
 	DebugStatus DebugState `cbor:"263,key"`
@@ -75,6 +107,25 @@ const (
 	UseCertIssuance      Use = 4 // Attestation for certificate signing requests
 	UseProofOfPossession Use = 5 // Attestation accompanying a proof-of-possession
 )
+
+// MarshalCBOR implements cbor.Marshaler.
+func (u *Use) MarshalCBOR(enc *cbor.Encoder) error {
+	enc.EncodeUint(uint64(*u))
+	return nil
+}
+
+// UnmarshalCBOR implements cbor.Unmarshaler.
+func (u *Use) UnmarshalCBOR(dec *cbor.Decoder) error {
+	v, err := dec.DecodeUint()
+	if err != nil {
+		return err
+	}
+	if v < 1 || v > 5 {
+		return fmt.Errorf("%w: %d", ErrInvalidUse, v)
+	}
+	*u = Use(v)
+	return nil
+}
 
 // IntendedUse is the token's purpose (key 275).
 type IntendedUse struct {
