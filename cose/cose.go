@@ -26,7 +26,7 @@ import (
 //
 // The final domain will be this prefix concatenated with another contextual one
 // from an app layer action.
-const DomainPrefix = "dark-bio-v1:"
+const DomainPrefix = xhpke.DomainPrefix
 
 // Private COSE algorithm / key-type identifiers.
 const (
@@ -610,10 +610,7 @@ func Encrypt(sign1 []byte, msgToAuth any, recipient *xhpke.PublicKey, domain []b
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	// Restrict the user's domain to the context of this library
-	info := []byte(DomainPrefix + string(domain))
-
-	// Build and seal Enc_structure
+	// Build and seal Enc_structure (domain prefixing is handled by xHPKE)
 	enc := encStructure{
 		Context:     "Encrypt0",
 		Protected:   protected,
@@ -623,7 +620,7 @@ func Encrypt(sign1 []byte, msgToAuth any, recipient *xhpke.PublicKey, domain []b
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	encapKey, ciphertext, err := recipient.Seal(sign1, aad, info)
+	encapKey, ciphertext, err := recipient.Seal(sign1, aad, domain)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
@@ -721,10 +718,7 @@ func Decrypt(msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, domain
 	var encapKey [xhpke.EncapKeySize]byte
 	copy(encapKey[:], encrypt0.Unprotected.EncapKey)
 
-	// Restrict the user's domain to the context of this library
-	info := []byte(DomainPrefix + string(domain))
-
-	// Rebuild and open Enc_structure
+	// Rebuild and open Enc_structure (domain prefixing is handled by xHPKE)
 	enc := encStructure{
 		Context:     "Encrypt0",
 		Protected:   encrypt0.Protected,
@@ -734,7 +728,7 @@ func Decrypt(msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, domain
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	signed, err := recipient.Open(&encapKey, encrypt0.Ciphertext, aad, info)
+	signed, err := recipient.Open(&encapKey, encrypt0.Ciphertext, aad, domain)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
