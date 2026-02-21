@@ -134,3 +134,156 @@ func TestSealOpen(t *testing.T) {
 		})
 	}
 }
+
+// Tests that a sender/receiver context can be established and used to
+// encrypt/decrypt multiple messages in sequence.
+func TestContextSealOpen(t *testing.T) {
+	secret := GenerateKey()
+	public := secret.PublicKey()
+
+	// Set up the sender and receiver contexts
+	sender, encapKey, err := public.NewSender([]byte("test-session"))
+	if err != nil {
+		t.Fatalf("failed to setup sender: %v", err)
+	}
+	receiver, err := secret.NewReceiver(&encapKey, []byte("test-session"))
+	if err != nil {
+		t.Fatalf("failed to setup receiver: %v", err)
+	}
+	// Encrypt and decrypt multiple messages in sequence
+	type testMsg struct {
+		seal, auth []byte
+	}
+	messages := []testMsg{
+		{[]byte("first message"), []byte("auth-1")},
+		{[]byte("second message"), []byte("auth-2")},
+		{[]byte("third message"), nil},
+		{nil, []byte("auth-only")}, // empty message
+		{[]byte("fifth message after empty"), []byte("auth-5")},
+	}
+	for i, msg := range messages {
+		ciphertext, err := sender.Seal(msg.seal, msg.auth)
+		if err != nil {
+			t.Fatalf("failed to seal message %d: %v", i, err)
+		}
+		plaintext, err := receiver.Open(ciphertext, msg.auth)
+		if err != nil {
+			t.Fatalf("failed to open message %d: %v", i, err)
+		}
+		if !bytes.Equal(plaintext, msg.seal) {
+			t.Fatalf("message %d mismatch: got %q, want %q", i, plaintext, msg.seal)
+		}
+	}
+}
+
+// Tests that a receiver context rejects messages decrypted out of order.
+// The HPKE sequence counter is only advanced on success, so after a failed
+// open the context remains usable for the correct next message.
+func TestContextRejectsOutOfOrder(t *testing.T) {
+	secret := GenerateKey()
+	public := secret.PublicKey()
+
+	sender, encapKey, err := public.NewSender([]byte("test-order"))
+	if err != nil {
+		t.Fatalf("failed to setup sender: %v", err)
+	}
+	receiver, err := secret.NewReceiver(&encapKey, []byte("test-order"))
+	if err != nil {
+		t.Fatalf("failed to setup receiver: %v", err)
+	}
+	// Seal two messages
+	ct0, err := sender.Seal([]byte("message 0"), []byte("aad-0"))
+	if err != nil {
+		t.Fatalf("failed to seal message 0: %v", err)
+	}
+	ct1, err := sender.Seal([]byte("message 1"), []byte("aad-1"))
+	if err != nil {
+		t.Fatalf("failed to seal message 1: %v", err)
+	}
+	// Try to open the second message first (should fail: wrong nonce)
+	if _, err := receiver.Open(ct1, []byte("aad-1")); err == nil {
+		t.Fatal("should reject out-of-order message")
+	}
+	// The sequence counter doesn't advance on failure, so the correct
+	// next message (ct0) should still work
+	pt0, err := receiver.Open(ct0, []byte("aad-0"))
+	if err != nil {
+		t.Fatalf("should open in-order message: %v", err)
+	}
+	if !bytes.Equal(pt0, []byte("message 0")) {
+		t.Fatalf("message 0 mismatch: got %q", pt0)
+	}
+	// And now ct1 should work since the counter has advanced
+	pt1, err := receiver.Open(ct1, []byte("aad-1"))
+	if err != nil {
+		t.Fatalf("should open next message: %v", err)
+	}
+	if !bytes.Equal(pt1, []byte("message 1")) {
+		t.Fatalf("message 1 mismatch: got %q", pt1)
+	}
+}
+
+// Tests that mismatched domains between sender and receiver prevent
+// decryption (the HPKE contexts derive different keys).
+func TestContextRejectsWrongDomain(t *testing.T) {
+	secret := GenerateKey()
+	public := secret.PublicKey()
+
+	sender, encapKey, err := public.NewSender([]byte("domain-a"))
+	if err != nil {
+		t.Fatalf("failed to setup sender: %v", err)
+	}
+	receiver, err := secret.NewReceiver(&encapKey, []byte("domain-b"))
+	if err != nil {
+		t.Fatalf("failed to setup receiver: %v", err)
+	}
+	ciphertext, err := sender.Seal([]byte("secret"), []byte("aad"))
+	if err != nil {
+		t.Fatalf("failed to seal: %v", err)
+	}
+	if _, err := receiver.Open(ciphertext, []byte("aad")); err == nil {
+		t.Fatal("should reject mismatched domain")
+	}
+}
+
+// Tests that mismatched additional authenticated data between seal and open
+// prevents decryption for both single-shot and context-based APIs.
+func TestRejectsWrongAuth(t *testing.T) {
+	secret := GenerateKey()
+	public := secret.PublicKey()
+
+	// Single-shot: wrong AAD must fail
+	sessionKey, ciphertext, err := public.Seal([]byte("secret"), []byte("correct-aad"), []byte("domain"))
+	if err != nil {
+		t.Fatalf("failed to seal: %v", err)
+	}
+	if _, err := secret.Open(&sessionKey, ciphertext, []byte("wrong-aad"), []byte("domain")); err == nil {
+		t.Fatal("single-shot should reject wrong AAD")
+	}
+
+	// Context-based: wrong AAD must fail
+	sender, encapKey, err := public.NewSender([]byte("domain"))
+	if err != nil {
+		t.Fatalf("failed to setup sender: %v", err)
+	}
+	receiver, err := secret.NewReceiver(&encapKey, []byte("domain"))
+	if err != nil {
+		t.Fatalf("failed to setup receiver: %v", err)
+	}
+	ct, err := sender.Seal([]byte("secret"), []byte("correct-aad"))
+	if err != nil {
+		t.Fatalf("failed to seal: %v", err)
+	}
+	if _, err := receiver.Open(ct, []byte("wrong-aad")); err == nil {
+		t.Fatal("context should reject wrong AAD")
+	}
+
+	// Verify recovery: correct AAD still works after failed attempt
+	pt, err := receiver.Open(ct, []byte("correct-aad"))
+	if err != nil {
+		t.Fatalf("should open with correct AAD: %v", err)
+	}
+	if !bytes.Equal(pt, []byte("secret")) {
+		t.Fatalf("plaintext mismatch: got %q", pt)
+	}
+}
