@@ -194,6 +194,26 @@ func (k *SecretKey) Open(sessionKey *[EncapKeySize]byte, msgToOpen, msgToAuth, d
 	return recipient.Open(msgToAuth, msgToOpen)
 }
 
+// NewReceiver creates an HPKE receiver context for multi-message decryption
+// using the given encapsulated key. Messages must be decrypted in the same
+// order they were encrypted by the corresponding sender.
+//
+// Note: X-Wing uses Base mode (no sender authentication). The sender's identity
+// cannot be verified from the context alone.
+func (k *SecretKey) NewReceiver(sessionKey *[EncapKeySize]byte, domain []byte) (*Receiver, error) {
+	recipient, err := hpke.NewRecipient(
+		sessionKey[:],
+		k.inner,
+		hpke.HKDFSHA256(),
+		hpke.ChaCha20Poly1305(),
+		domain,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &Receiver{inner: recipient}, nil
+}
+
 // PublicKey contains an X-Wing public key for encrypting HPKE messages.
 type PublicKey struct {
 	inner hpke.PublicKey
@@ -408,4 +428,58 @@ func (k *PublicKey) Seal(msgToSeal, msgToAuth, domain []byte) ([EncapKeySize]byt
 	var sessionKey [EncapKeySize]byte
 	copy(sessionKey[:], encapKey)
 	return sessionKey, enc, nil
+}
+
+// NewSender creates an HPKE sender context for multi-message encryption to this
+// public key. Returns the sender context and the encapsulated key that must be
+// transmitted to the recipient.
+//
+// Messages encrypted with the returned context must be decrypted in order by the
+// corresponding receiver context.
+//
+// Note: X-Wing uses Base mode (no sender authentication). The recipient cannot
+// verify the sender's identity from the context alone.
+func (k *PublicKey) NewSender(domain []byte) (*Sender, [EncapKeySize]byte, error) {
+	encapKeyBytes, sender, err := hpke.NewSender(
+		k.inner,
+		hpke.HKDFSHA256(),
+		hpke.ChaCha20Poly1305(),
+		domain,
+	)
+	if err != nil {
+		return nil, [EncapKeySize]byte{}, err
+	}
+	var encapKey [EncapKeySize]byte
+	copy(encapKey[:], encapKeyBytes)
+	return &Sender{inner: sender}, encapKey, nil
+}
+
+// Receiver wraps an HPKE receiver decryption context for multi-message
+// communication. Each call to Open decrypts a message using an auto-incrementing
+// nonce.
+//
+// Messages must be provided in the same order they were sealed by the
+// corresponding Sender.
+type Receiver struct {
+	inner *hpke.Recipient
+}
+
+// Open decrypts a message using the next nonce in the sequence.
+func (c *Receiver) Open(msgToOpen, msgToAuth []byte) ([]byte, error) {
+	return c.inner.Open(msgToAuth, msgToOpen)
+}
+
+// Sender wraps an HPKE sender encryption context for multi-message
+// communication. Each call to Seal encrypts a message using an auto-incrementing
+// nonce, ensuring unique ciphertexts even for identical plaintexts.
+//
+// The corresponding Receiver must process messages in the same order they
+// were sealed.
+type Sender struct {
+	inner *hpke.Sender
+}
+
+// Seal encrypts a message using the next nonce in the sequence.
+func (c *Sender) Seal(msgToSeal, msgToAuth []byte) ([]byte, error) {
+	return c.inner.Seal(msgToAuth, msgToSeal)
 }
