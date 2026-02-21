@@ -24,6 +24,14 @@ import (
 	"github.com/dark-bio/crypto-go/pem"
 )
 
+// DomainPrefix is the prefix prepended to all domain strings before they are
+// used in HPKE operations. This binds every encryption to the dark-bio application
+// context, preventing cross-protocol attacks.
+//
+// The final domain will be this prefix concatenated with the caller-supplied
+// domain string.
+const DomainPrefix = "dark-bio-v1:"
+
 const (
 	// SecretKeySize is the size of the secret key seed in bytes.
 	SecretKeySize = 32
@@ -179,13 +187,16 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 // Note: X-Wing uses Base mode (no sender authentication). The sender's identity
 // cannot be verified from the ciphertext alone.
 func (k *SecretKey) Open(sessionKey *[EncapKeySize]byte, msgToOpen, msgToAuth, domain []byte) ([]byte, error) {
+	// Restrict the user's domain to the context of this library
+	info := append([]byte(DomainPrefix), domain...)
+
 	// Create a receiver session using Base mode (X-Wing doesn't support Auth mode)
 	recipient, err := hpke.NewRecipient(
 		sessionKey[:],
 		k.inner,
 		hpke.HKDFSHA256(),
 		hpke.ChaCha20Poly1305(),
-		domain,
+		info,
 	)
 	if err != nil {
 		return nil, err
@@ -201,12 +212,15 @@ func (k *SecretKey) Open(sessionKey *[EncapKeySize]byte, msgToOpen, msgToAuth, d
 // Note: X-Wing uses Base mode (no sender authentication). The sender's identity
 // cannot be verified from the context alone.
 func (k *SecretKey) NewReceiver(sessionKey *[EncapKeySize]byte, domain []byte) (*Receiver, error) {
+	// Restrict the user's domain to the context of this library
+	info := append([]byte(DomainPrefix), domain...)
+
 	recipient, err := hpke.NewRecipient(
 		sessionKey[:],
 		k.inner,
 		hpke.HKDFSHA256(),
 		hpke.ChaCha20Poly1305(),
-		domain,
+		info,
 	)
 	if err != nil {
 		return nil, err
@@ -410,12 +424,15 @@ func (f *Fingerprint) UnmarshalText(text []byte) error {
 // Note: X-Wing uses Base mode (no sender authentication). The recipient cannot
 // verify the sender's identity from the ciphertext alone.
 func (k *PublicKey) Seal(msgToSeal, msgToAuth, domain []byte) ([EncapKeySize]byte, []byte, error) {
+	// Restrict the user's domain to the context of this library
+	info := append([]byte(DomainPrefix), domain...)
+
 	// Create a sender session using Base mode (X-Wing doesn't support Auth mode)
 	encapKey, sender, err := hpke.NewSender(
 		k.inner,
 		hpke.HKDFSHA256(),
 		hpke.ChaCha20Poly1305(),
-		domain,
+		info,
 	)
 	if err != nil {
 		return [EncapKeySize]byte{}, nil, err
@@ -440,11 +457,14 @@ func (k *PublicKey) Seal(msgToSeal, msgToAuth, domain []byte) ([EncapKeySize]byt
 // Note: X-Wing uses Base mode (no sender authentication). The recipient cannot
 // verify the sender's identity from the context alone.
 func (k *PublicKey) NewSender(domain []byte) (*Sender, [EncapKeySize]byte, error) {
+	// Restrict the user's domain to the context of this library
+	info := append([]byte(DomainPrefix), domain...)
+
 	encapKeyBytes, sender, err := hpke.NewSender(
 		k.inner,
 		hpke.HKDFSHA256(),
 		hpke.ChaCha20Poly1305(),
-		domain,
+		info,
 	)
 	if err != nil {
 		return nil, [EncapKeySize]byte{}, err
