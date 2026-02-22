@@ -22,8 +22,8 @@
 //	    UEID []byte `cbor:"256,key"`
 //	}
 //
-//	token, err := cwt.Issue(cert, signerKey, "device-cert")
-//	verified, err := cwt.Verify[DeviceCert](token, issuerPubKey, "device-cert", now)
+//	token, err := cwt.Issue(cert, signerKey, []byte("device-cert"))
+//	verified, err := cwt.Verify[DeviceCert](token, issuerPubKey, []byte("device-cert"), now)
 package cwt
 
 import (
@@ -47,12 +47,12 @@ var (
 //
 // The claims value must be a struct whose fields encode as a CBOR map
 // (using cbor:"N,key" tags and/or embedded claim types).
-func Issue(claims any, signer xdsa.Signer, domain string) ([]byte, error) {
+func Issue(claims any, signer xdsa.Signer, domain []byte) ([]byte, error) {
 	claimsBytes, err := cbor.Marshal(claims)
 	if err != nil {
 		return nil, err
 	}
-	return cose.Sign(cbor.Raw(claimsBytes), cbor.Null{}, signer, []byte(domain))
+	return cose.Sign(cbor.Raw(claimsBytes), cbor.Null{}, signer, domain)
 }
 
 // Verify verifies a CWT's COSE signature and temporal validity, then decodes
@@ -61,9 +61,9 @@ func Issue(claims any, signer xdsa.Signer, domain string) ([]byte, error) {
 // When now is non-nil, temporal claims are validated: nbf (key 5) must be present
 // and nbf <= *now, and if exp (key 4) is present then *now < exp. When now is nil,
 // temporal validation is skipped entirely.
-func Verify[T any](data []byte, verifier *xdsa.PublicKey, domain string, now *uint64) (*T, error) {
+func Verify[T any](data []byte, verifier *xdsa.PublicKey, domain []byte, now *uint64) (*T, error) {
 	// Verify COSE signature (skip COSE drift check — CWT handles temporal validation)
-	raw, err := cose.Verify[cbor.Raw](data, cbor.Null{}, verifier, []byte(domain), nil)
+	raw, err := cose.Verify[cbor.Raw](data, cbor.Null{}, verifier, domain, nil)
 	if err != nil {
 		return nil, err
 	}
