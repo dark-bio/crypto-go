@@ -2276,3 +2276,99 @@ func TestMaxNestingDepth(t *testing.T) {
 		t.Fatalf("Verify over max depth should fail with ErrMaxDepthExceeded, got: %v", err)
 	}
 }
+
+// customValue is a test type with a pointer-receiver MarshalCBOR that wraps an
+// unexported field. This mimics real types (like CWT confirmation keys) where
+// the custom encoding is essential and reflection-based fallback would silently
+// produce wrong output.
+type customValue struct {
+	secret uint64
+}
+
+func (c *customValue) MarshalCBOR(enc *Encoder) error {
+	return enc.Encode(&struct {
+		V uint64 `cbor:"1,key"`
+	}{V: c.secret})
+}
+
+func (c *customValue) UnmarshalCBOR(dec *Decoder) error {
+	var wrapper struct {
+		V uint64 `cbor:"1,key"`
+	}
+	if err := dec.Decode(&wrapper); err != nil {
+		return err
+	}
+	c.secret = wrapper.V
+	return nil
+}
+
+// Tests that a pointer-receiver Marshaler on a struct field works identically
+// whether the top-level value is passed by value or by pointer. Before the fix,
+// passing by value made the field non-addressable, causing the pointer-receiver
+// MarshalCBOR to be silently skipped and the unexported field to be lost.
+func TestMarshalerPointerReceiver(t *testing.T) {
+	type Outer struct {
+		Name  string      `cbor:"1,key"`
+		Inner customValue `cbor:"2,key"`
+	}
+	val := Outer{Name: "test", Inner: customValue{secret: 42}}
+
+	byPtr, err := Marshal(&val)
+	if err != nil {
+		t.Fatalf("Marshal(&val) error: %v", err)
+	}
+	byVal, err := Marshal(val)
+	if err != nil {
+		t.Fatalf("Marshal(val) error: %v", err)
+	}
+	if !bytes.Equal(byPtr, byVal) {
+		t.Fatalf("Marshal by value %x != by pointer %x", byVal, byPtr)
+	}
+	// Verify roundtrip: the custom encoding must be present and decodable
+	var decoded Outer
+	if err := Unmarshal(byVal, &decoded); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if decoded.Name != "test" || decoded.Inner.secret != 42 {
+		t.Errorf("roundtrip failed: got %+v", decoded)
+	}
+}
+
+// Tests that a pointer-receiver Marshaler works on an embedded struct field
+// passed through a top-level value (the realistic CWT claims pattern).
+func TestMarshalerPointerReceiverEmbedded(t *testing.T) {
+	type Identity struct {
+		Iss string `cbor:"1,key"`
+	}
+	type Confirm struct {
+		Cnf customValue `cbor:"8,key"`
+	}
+	type Claims struct {
+		Identity
+		Confirm
+	}
+	val := Claims{
+		Identity: Identity{Iss: "test"},
+		Confirm:  Confirm{Cnf: customValue{secret: 99}},
+	}
+
+	byPtr, err := Marshal(&val)
+	if err != nil {
+		t.Fatalf("Marshal(&val) error: %v", err)
+	}
+	byVal, err := Marshal(val)
+	if err != nil {
+		t.Fatalf("Marshal(val) error: %v", err)
+	}
+	if !bytes.Equal(byPtr, byVal) {
+		t.Fatalf("Marshal by value %x != by pointer %x", byVal, byPtr)
+	}
+	// Verify roundtrip
+	var decoded Claims
+	if err := Unmarshal(byVal, &decoded); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if decoded.Iss != "test" || decoded.Cnf.secret != 99 {
+		t.Errorf("roundtrip failed: got Iss=%q secret=%d", decoded.Iss, decoded.Cnf.secret)
+	}
+}
