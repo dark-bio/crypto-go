@@ -48,11 +48,11 @@ func TestIssueVerify(t *testing.T) {
 		Confirm:    claims.NewConfirm(device.PublicKey()),
 		UEID:       eat.UEID{UEID: []byte("SN-999")},
 	}
-	token, err := Issue(cert, issuer, "test-domain")
+	token, err := Issue(cert, issuer, []byte("test-domain"))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	got, err := Verify[deviceCert](token, issuer.PublicKey(), "test-domain", ptr(1500000))
+	got, err := Verify[deviceCert](token, issuer.PublicKey(), []byte("test-domain"), ptr(1500000))
 	if err != nil {
 		t.Fatalf("verify: %v", err)
 	}
@@ -79,12 +79,12 @@ func TestVerifySkipTime(t *testing.T) {
 		NotBefore: claims.NotBefore{Nbf: 1000000},
 		Confirm:   claims.NewConfirm(xdsa.GenerateKey().PublicKey()),
 	}
-	token, err := Issue(cert, issuer, "test")
+	token, err := Issue(cert, issuer, []byte("test"))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	// now=nil should skip time checks entirely
-	got, err := Verify[simpleCert](token, issuer.PublicKey(), "test", nil)
+	got, err := Verify[simpleCert](token, issuer.PublicKey(), []byte("test"), nil)
 	if err != nil {
 		t.Fatalf("verify with nil time should succeed: %v", err)
 	}
@@ -102,11 +102,11 @@ func TestVerifyNotYetValid(t *testing.T) {
 		NotBefore: claims.NotBefore{Nbf: 1000000},
 		Confirm:   claims.NewConfirm(xdsa.GenerateKey().PublicKey()),
 	}
-	token, err := Issue(cert, issuer, "test")
+	token, err := Issue(cert, issuer, []byte("test"))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	_, err = Verify[simpleCert](token, issuer.PublicKey(), "test", ptr(500000))
+	_, err = Verify[simpleCert](token, issuer.PublicKey(), []byte("test"), ptr(500000))
 	if !errors.Is(err, ErrNotYetValid) {
 		t.Fatalf("expected ErrNotYetValid, got %v", err)
 	}
@@ -122,11 +122,11 @@ func TestVerifyExpired(t *testing.T) {
 		NotBefore:  claims.NotBefore{Nbf: 1000000},
 		Confirm:    claims.NewConfirm(xdsa.GenerateKey().PublicKey()),
 	}
-	token, err := Issue(cert, issuer, "test")
+	token, err := Issue(cert, issuer, []byte("test"))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	_, err = Verify[simpleCert](token, issuer.PublicKey(), "test", ptr(3000000))
+	_, err = Verify[simpleCert](token, issuer.PublicKey(), []byte("test"), ptr(3000000))
 	if !errors.Is(err, ErrAlreadyExpired) {
 		t.Fatalf("expected ErrAlreadyExpired, got %v", err)
 	}
@@ -145,11 +145,11 @@ func TestVerifyMissingNbf(t *testing.T) {
 		Subject: claims.Subject{Sub: "test"},
 		Confirm: claims.NewConfirm(xdsa.GenerateKey().PublicKey()),
 	}
-	token, err := Issue(cert, issuer, "test")
+	token, err := Issue(cert, issuer, []byte("test"))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	_, err = Verify[noNbf](token, issuer.PublicKey(), "test", ptr(1000000))
+	_, err = Verify[noNbf](token, issuer.PublicKey(), []byte("test"), ptr(1000000))
 	if !errors.Is(err, ErrMissingNbf) {
 		t.Fatalf("expected ErrMissingNbf, got %v", err)
 	}
@@ -165,11 +165,11 @@ func TestVerifyWrongKey(t *testing.T) {
 		NotBefore: claims.NotBefore{Nbf: 1000000},
 		Confirm:   claims.NewConfirm(xdsa.GenerateKey().PublicKey()),
 	}
-	token, err := Issue(cert, issuer, "test")
+	token, err := Issue(cert, issuer, []byte("test"))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	_, err = Verify[simpleCert](token, wrong.PublicKey(), "test", ptr(1500000))
+	_, err = Verify[simpleCert](token, wrong.PublicKey(), []byte("test"), ptr(1500000))
 	if err == nil {
 		t.Fatalf("expected error with wrong key, got nil")
 	}
@@ -184,7 +184,7 @@ func TestSigner(t *testing.T) {
 		NotBefore: claims.NotBefore{Nbf: 1000000},
 		Confirm:   claims.NewConfirm(xdsa.GenerateKey().PublicKey()),
 	}
-	token, err := Issue(cert, issuer, "test")
+	token, err := Issue(cert, issuer, []byte("test"))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestPeek(t *testing.T) {
 		NotBefore: claims.NotBefore{Nbf: 1000000},
 		Confirm:   claims.NewConfirm(xdsa.GenerateKey().PublicKey()),
 	}
-	token, err := Issue(cert, issuer, "test")
+	token, err := Issue(cert, issuer, []byte("test"))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
@@ -228,11 +228,11 @@ func TestVerifyWrongDomain(t *testing.T) {
 		NotBefore: claims.NotBefore{Nbf: 1000000},
 		Confirm:   claims.NewConfirm(xdsa.GenerateKey().PublicKey()),
 	}
-	token, err := Issue(cert, issuer, "domain-a")
+	token, err := Issue(cert, issuer, []byte("domain-a"))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
-	_, err = Verify[simpleCert](token, issuer.PublicKey(), "domain-b", ptr(1500000))
+	_, err = Verify[simpleCert](token, issuer.PublicKey(), []byte("domain-b"), ptr(1500000))
 	if err == nil {
 		t.Fatalf("expected error with wrong domain, got nil")
 	}
@@ -248,16 +248,16 @@ func TestVerifyBoundaryExact(t *testing.T) {
 		NotBefore:  claims.NotBefore{Nbf: 1000000},
 		Confirm:    claims.NewConfirm(xdsa.GenerateKey().PublicKey()),
 	}
-	token, err := Issue(cert, issuer, "test")
+	token, err := Issue(cert, issuer, []byte("test"))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	// now == nbf should pass
-	if _, err := Verify[simpleCert](token, issuer.PublicKey(), "test", ptr(1000000)); err != nil {
+	if _, err := Verify[simpleCert](token, issuer.PublicKey(), []byte("test"), ptr(1000000)); err != nil {
 		t.Fatalf("now == nbf should pass: %v", err)
 	}
 	// now == exp should fail (exp is "on or after which the token MUST NOT be accepted")
-	if _, err := Verify[simpleCert](token, issuer.PublicKey(), "test", ptr(2000000)); !errors.Is(err, ErrAlreadyExpired) {
+	if _, err := Verify[simpleCert](token, issuer.PublicKey(), []byte("test"), ptr(2000000)); !errors.Is(err, ErrAlreadyExpired) {
 		t.Fatalf("now == exp should fail with ErrAlreadyExpired, got %v", err)
 	}
 }
@@ -276,12 +276,12 @@ func TestVerifyNoExpiration(t *testing.T) {
 		NotBefore: claims.NotBefore{Nbf: 1000000},
 		Confirm:   claims.NewConfirm(xdsa.GenerateKey().PublicKey()),
 	}
-	token, err := Issue(cert, issuer, "test")
+	token, err := Issue(cert, issuer, []byte("test"))
 	if err != nil {
 		t.Fatalf("issue: %v", err)
 	}
 	// Should pass even far in the future since there's no exp
-	if _, err := Verify[noExp](token, issuer.PublicKey(), "test", ptr(99999999)); err != nil {
+	if _, err := Verify[noExp](token, issuer.PublicKey(), []byte("test"), ptr(99999999)); err != nil {
 		t.Fatalf("no exp should pass: %v", err)
 	}
 }
@@ -308,7 +308,7 @@ func TestVerifyDuplicateNbf(t *testing.T) {
 		t.Fatalf("sign: %v", err)
 	}
 	// Verify should fail with ErrDuplicateKey before claims decoding
-	_, err = Verify[simpleCert](token, issuer.PublicKey(), "test", ptr(1500000))
+	_, err = Verify[simpleCert](token, issuer.PublicKey(), []byte("test"), ptr(1500000))
 	if !errors.Is(err, ErrDuplicateKey) {
 		t.Fatalf("expected ErrDuplicateKey, got %v", err)
 	}
