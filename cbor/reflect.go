@@ -89,9 +89,19 @@ func isOptionType(t reflect.Type) bool {
 // encodeValue recursively encodes a reflect.Value to CBOR.
 // The optional flag indicates whether nil values are allowed (from struct tag).
 func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
-	// Check if the value implements Marshaler (try pointer first, then value)
+	// Check if the value implements Marshaler (try pointer first, then value).
+	// When the value is not addressable (e.g. passed by value through an any
+	// interface), make a temporary addressable copy so pointer-receiver methods
+	// are still discovered. Without this, types with pointer-receiver MarshalCBOR
+	// silently fall through to reflection and produce wrong output.
 	if v.CanAddr() {
 		if m, ok := v.Addr().Interface().(Marshaler); ok {
+			return m.MarshalCBOR(enc)
+		}
+	} else {
+		tmp := reflect.New(v.Type())
+		tmp.Elem().Set(v)
+		if m, ok := tmp.Interface().(Marshaler); ok {
 			return m.MarshalCBOR(enc)
 		}
 	}
