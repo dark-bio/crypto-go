@@ -16,10 +16,11 @@
 //   - Integers: uint64, int64
 //   - Text:     string
 //   - Bytes:    []byte, [N]byte
-//   - Slices:   []T (encoded as CBOR arrays)
-//   - Arrays:   [N]T (encoded as CBOR arrays, length-checked on decode)
 //   - Null:     cbor.Null, cbor.Option[T]{Some: false}
-//   - Structs:  structs tagged cbor:"_,array" (fields encoded in declaration order)
+//   - Arrays:
+//     []T (encoded as CBOR arrays)
+//     [N]T (encoded as CBOR arrays, length-checked on decode)
+//     structs tagged cbor:"_,array" (fields encoded in declaration order)
 //   - Maps:     structs with cbor:"N,key" fields (integer keys, deterministic order)
 //   - Raw:      cbor.Raw (opaque CBOR bytes, passed through without parsing)
 //
