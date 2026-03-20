@@ -134,7 +134,7 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 			enc.buf = append(enc.buf, v.Bytes()...)
 			return nil
 		}
-		// Only []byte is permitted as a variable-length slice
+		// []byte encodes as CBOR byte string
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			if v.IsNil() {
 				if !optional {
@@ -146,7 +146,7 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 			enc.EncodeBytes(v.Bytes())
 			return nil
 		}
-		// Generic []T: encode as CBOR array
+		// []T is encoded as a CBOR array
 		if v.IsNil() {
 			if !optional {
 				return ErrUnexpectedNil
@@ -163,7 +163,7 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 		return nil
 
 	case reflect.Array:
-		// Only [N]byte is permitted as a fixed array
+		// [N]byte encodes as CBOR byte string
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			slice := make([]byte, v.Len())
 			for i := range v.Len() {
@@ -172,7 +172,7 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 			enc.EncodeBytes(slice)
 			return nil
 		}
-		// Generic [N]T: encode as CBOR array
+		// [N]T is encoded as a fixed CBOR array
 		enc.EncodeArrayHeader(v.Len())
 		for i := range v.Len() {
 			if err := encodeValue(enc, v.Index(i), false); err != nil {
@@ -377,7 +377,7 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 			v.SetBytes(append([]byte(nil), dec.data[start:dec.pos]...))
 			return nil
 		}
-		// Only []byte is permitted as a variable-length slice
+		// []byte encodes as CBOR byte string
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			if dec.PeekNull() {
 				if !optional {
@@ -396,7 +396,7 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 			v.SetBytes(val)
 			return nil
 		}
-		// Generic []T: decode from CBOR array
+		// []T is decoded from a CBOR array
 		if dec.PeekNull() {
 			if !optional {
 				return ErrUnexpectedNull
@@ -428,7 +428,7 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		return nil
 
 	case reflect.Array:
-		// Only [N]byte is permitted as a fixed array
+		// [N]byte encodes as CBOR byte string
 		if v.Type().Elem().Kind() == reflect.Uint8 {
 			val, err := dec.DecodeBytesFixed(v.Len())
 			if err != nil {
@@ -439,7 +439,7 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 			}
 			return nil
 		}
-		// Generic [N]T: decode from CBOR array
+		// [N]T is decoded from a fixed CBOR array
 		length, err := dec.DecodeArrayHeader()
 		if err != nil {
 			return err
