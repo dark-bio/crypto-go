@@ -31,6 +31,8 @@ type Unmarshaler interface {
 //   - int, int8, int16, int32, int64: signed integers
 //   - string: UTF-8 text strings
 //   - []byte, [N]byte: byte strings
+//   - []T: CBOR arrays of any supported element type
+//   - [N]T: CBOR arrays with length enforcement on decode
 //   - structs with `cbor:"_,array"` tag: CBOR arrays (fields in order)
 //   - structs with `cbor:"N,key"` tags: CBOR maps with integer keys
 //   - types implementing Marshaler: custom CBOR encoding
@@ -144,7 +146,21 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 			enc.EncodeBytes(v.Bytes())
 			return nil
 		}
-		return fmt.Errorf("%w: variable-length slices not permitted, use fixed arrays", ErrUnsupportedType)
+		// Generic []T: encode as CBOR array
+		if v.IsNil() {
+			if !optional {
+				return ErrUnexpectedNil
+			}
+			enc.EncodeNull()
+			return nil
+		}
+		enc.EncodeArrayHeader(v.Len())
+		for i := range v.Len() {
+			if err := encodeValue(enc, v.Index(i), false); err != nil {
+				return err
+			}
+		}
+		return nil
 
 	case reflect.Array:
 		// Only [N]byte is permitted as a fixed array
@@ -156,7 +172,14 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 			enc.EncodeBytes(slice)
 			return nil
 		}
-		return fmt.Errorf("%w: only [N]byte arrays permitted, use structs with array tag", ErrUnsupportedType)
+		// Generic [N]T: encode as CBOR array
+		enc.EncodeArrayHeader(v.Len())
+		for i := range v.Len() {
+			if err := encodeValue(enc, v.Index(i), false); err != nil {
+				return err
+			}
+		}
+		return nil
 
 	case reflect.Struct:
 		t := v.Type()
@@ -373,7 +396,36 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 			v.SetBytes(val)
 			return nil
 		}
-		return fmt.Errorf("%w: variable-length slices not permitted, use fixed arrays", ErrUnsupportedType)
+		// Generic []T: decode from CBOR array
+		if dec.PeekNull() {
+			if !optional {
+				return ErrUnexpectedNull
+			}
+			if err := dec.DecodeNull(); err != nil {
+				return err
+			}
+			v.Set(reflect.Zero(v.Type()))
+			return nil
+		}
+		length, err := dec.DecodeArrayHeader()
+		if err != nil {
+			return err
+		}
+		if length > uint64(maxInt) {
+			return ErrIntegerOverflow
+		}
+		n := int(length)
+		if v.IsNil() || v.Cap() < n {
+			v.Set(reflect.MakeSlice(v.Type(), n, n))
+		} else {
+			v.SetLen(n)
+		}
+		for i := range n {
+			if err := decodeValue(dec, v.Index(i), false); err != nil {
+				return err
+			}
+		}
+		return nil
 
 	case reflect.Array:
 		// Only [N]byte is permitted as a fixed array
@@ -387,7 +439,20 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 			}
 			return nil
 		}
-		return fmt.Errorf("%w: only [N]byte arrays permitted, use structs with array tag", ErrUnsupportedType)
+		// Generic [N]T: decode from CBOR array
+		length, err := dec.DecodeArrayHeader()
+		if err != nil {
+			return err
+		}
+		if int(length) != v.Len() {
+			return fmt.Errorf("%w: %d, want %d", ErrUnexpectedItemCount, length, v.Len())
+		}
+		for i := range v.Len() {
+			if err := decodeValue(dec, v.Index(i), false); err != nil {
+				return err
+			}
+		}
+		return nil
 
 	case reflect.Struct:
 		t := v.Type()
@@ -773,7 +838,7 @@ func collectMapFields(t reflect.Type, prefix []int, gs *ptrGroupState, visited m
 			return nil, fmt.Errorf("%w: field %s has invalid key key %q", ErrUnsupportedType, f.Name, parts[0])
 		}
 		if optional && !isOptionalCapable(f.Type) {
-			return nil, fmt.Errorf("%w: field %s is optional but type %s is not nilable (use *T, []byte, or Option[T])", ErrUnsupportedType, f.Name, f.Type)
+			return nil, fmt.Errorf("%w: field %s is optional but type %s is not nilable (use *T, []T, or Option[T])", ErrUnsupportedType, f.Name, f.Type)
 		}
 		// Build full field index path for FieldByIndex navigation
 		fullIndex := make([]int, len(prefix)+1)
@@ -823,7 +888,7 @@ func fieldByIndex(v reflect.Value, index []int, create bool) (reflect.Value, err
 // map context (i.e., can distinguish "absent" from "zero value"). Only pointer
 // types, byte slices, and Option[T] qualify.
 func isOptionalCapable(t reflect.Type) bool {
-	if t.Kind() == reflect.Ptr || (t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8) {
+	if t.Kind() == reflect.Ptr || t.Kind() == reflect.Slice {
 		return true
 	}
 	return isOptionType(t)

@@ -2372,3 +2372,313 @@ func TestMarshalerPointerReceiverEmbedded(t *testing.T) {
 		t.Errorf("roundtrip failed: got Iss=%q secret=%d", decoded.Iss, decoded.Cnf.secret)
 	}
 }
+
+// Tests that generic slices []T encode as CBOR arrays and roundtrip correctly.
+func TestSliceRoundtrip(t *testing.T) {
+	t.Run("uint64", func(t *testing.T) {
+		input := []uint64{1, 2, 3}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output []uint64
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if len(output) != 3 || output[0] != 1 || output[1] != 2 || output[2] != 3 {
+			t.Errorf("roundtrip failed: got %v", output)
+		}
+	})
+	t.Run("string", func(t *testing.T) {
+		input := []string{"hello", "world"}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output []string
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if len(output) != 2 || output[0] != "hello" || output[1] != "world" {
+			t.Errorf("roundtrip failed: got %v", output)
+		}
+	})
+	t.Run("bool", func(t *testing.T) {
+		input := []bool{true, false, true}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output []bool
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if len(output) != 3 || output[0] != true || output[1] != false || output[2] != true {
+			t.Errorf("roundtrip failed: got %v", output)
+		}
+	})
+	t.Run("int64", func(t *testing.T) {
+		input := []int64{-1, 0, 42}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output []int64
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if len(output) != 3 || output[0] != -1 || output[1] != 0 || output[2] != 42 {
+			t.Errorf("roundtrip failed: got %v", output)
+		}
+	})
+	t.Run("byte_slices", func(t *testing.T) {
+		input := [][]byte{{0x01, 0x02}, {0x03}}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output [][]byte
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if len(output) != 2 || !bytes.Equal(output[0], []byte{0x01, 0x02}) || !bytes.Equal(output[1], []byte{0x03}) {
+			t.Errorf("roundtrip failed: got %v", output)
+		}
+	})
+	t.Run("empty", func(t *testing.T) {
+		input := []uint64{}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		// Empty array should encode as 0x80 (array of length 0)
+		if !bytes.Equal(data, []byte{0x80}) {
+			t.Errorf("empty slice encoding: got %x, want 80", data)
+		}
+		var output []uint64
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if len(output) != 0 {
+			t.Errorf("roundtrip failed: got %v", output)
+		}
+	})
+	t.Run("nested", func(t *testing.T) {
+		input := [][]uint64{{1, 2}, {3, 4}}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output [][]uint64
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if len(output) != 2 || len(output[0]) != 2 || len(output[1]) != 2 {
+			t.Fatalf("roundtrip wrong shape: got %v", output)
+		}
+		if output[0][0] != 1 || output[0][1] != 2 || output[1][0] != 3 || output[1][1] != 4 {
+			t.Errorf("roundtrip failed: got %v", output)
+		}
+	})
+}
+
+// Tests that slices of structs (both array-mode and map-mode) roundtrip correctly.
+func TestSliceOfStructsRoundtrip(t *testing.T) {
+	type arrayStruct struct {
+		_    struct{} `cbor:"_,array"`
+		Name string
+		Age  uint64
+	}
+	type mapStruct struct {
+		Name string `cbor:"1,key"`
+		Age  uint64 `cbor:"2,key"`
+	}
+	t.Run("array_mode", func(t *testing.T) {
+		input := []arrayStruct{
+			{Name: "alice", Age: 30},
+			{Name: "bob", Age: 25},
+		}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output []arrayStruct
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if len(output) != 2 || output[0].Name != "alice" || output[0].Age != 30 || output[1].Name != "bob" || output[1].Age != 25 {
+			t.Errorf("roundtrip failed: got %+v", output)
+		}
+	})
+	t.Run("map_mode", func(t *testing.T) {
+		input := []mapStruct{
+			{Name: "alice", Age: 30},
+			{Name: "bob", Age: 25},
+		}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output []mapStruct
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if len(output) != 2 || output[0].Name != "alice" || output[0].Age != 30 || output[1].Name != "bob" || output[1].Age != 25 {
+			t.Errorf("roundtrip failed: got %+v", output)
+		}
+	})
+}
+
+// Tests that slices of types implementing Marshaler/Unmarshaler roundtrip correctly.
+func TestSliceOfMarshalersRoundtrip(t *testing.T) {
+	input := []customValue{{secret: 10}, {secret: 20}}
+	data, err := Marshal(input)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	var output []customValue
+	if err := Unmarshal(data, &output); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if len(output) != 2 || output[0].secret != 10 || output[1].secret != 20 {
+		t.Errorf("roundtrip failed: got %+v", output)
+	}
+}
+
+// Tests that nil slices produce errors when not optional and encode as null when optional.
+func TestSliceNilHandling(t *testing.T) {
+	t.Run("nil_not_optional", func(t *testing.T) {
+		var input []uint64 // nil
+		_, err := Marshal(input)
+		if !errors.Is(err, ErrUnexpectedNil) {
+			t.Errorf("Marshal(nil) error: got %v, want %v", err, ErrUnexpectedNil)
+		}
+	})
+	t.Run("null_decode_not_optional", func(t *testing.T) {
+		data := []byte{0xf6} // CBOR null
+		var output []uint64
+		err := Unmarshal(data, &output)
+		if !errors.Is(err, ErrUnexpectedNull) {
+			t.Errorf("Unmarshal(null) error: got %v, want %v", err, ErrUnexpectedNull)
+		}
+	})
+	t.Run("optional_in_struct", func(t *testing.T) {
+		type s struct {
+			Items []uint64 `cbor:"1,key,optional"`
+		}
+		// Nil slice: key should be omitted
+		data, err := Marshal(s{Items: nil})
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		// Should be an empty map (1 byte: 0xa0)
+		if !bytes.Equal(data, []byte{0xa0}) {
+			t.Errorf("nil optional encoding: got %x, want a0", data)
+		}
+		// Non-nil slice: key should be present
+		data, err = Marshal(s{Items: []uint64{1, 2}})
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output s
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if len(output.Items) != 2 || output.Items[0] != 1 || output.Items[1] != 2 {
+			t.Errorf("roundtrip failed: got %v", output.Items)
+		}
+		// Decode empty map back: optional field should be nil
+		var output2 s
+		output2.Items = []uint64{99} // pre-fill to verify it gets cleared
+		if err := Unmarshal([]byte{0xa0}, &output2); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if output2.Items != nil {
+			t.Errorf("missing optional should be nil, got %v", output2.Items)
+		}
+	})
+}
+
+// Tests that decoding into a pre-allocated longer slice truncates correctly.
+func TestSliceDecodeReuse(t *testing.T) {
+	input := []uint64{10, 20}
+	data, err := Marshal(input)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	output := []uint64{1, 2, 3, 4, 5} // longer than input
+	if err := Unmarshal(data, &output); err != nil {
+		t.Fatalf("Unmarshal error: %v", err)
+	}
+	if len(output) != 2 || output[0] != 10 || output[1] != 20 {
+		t.Errorf("reuse decode failed: got %v", output)
+	}
+}
+
+// Tests that fixed-size arrays [N]T encode and decode as CBOR arrays.
+func TestFixedArrayRoundtrip(t *testing.T) {
+	t.Run("uint64", func(t *testing.T) {
+		input := [3]uint64{1, 2, 3}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output [3]uint64
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if output != [3]uint64{1, 2, 3} {
+			t.Errorf("roundtrip failed: got %v", output)
+		}
+	})
+	t.Run("string", func(t *testing.T) {
+		input := [2]string{"a", "b"}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output [2]string
+		if err := Unmarshal(data, &output); err != nil {
+			t.Fatalf("Unmarshal error: %v", err)
+		}
+		if output != [2]string{"a", "b"} {
+			t.Errorf("roundtrip failed: got %v", output)
+		}
+	})
+	t.Run("length_mismatch", func(t *testing.T) {
+		input := [3]uint64{1, 2, 3}
+		data, err := Marshal(input)
+		if err != nil {
+			t.Fatalf("Marshal error: %v", err)
+		}
+		var output [2]uint64
+		err = Unmarshal(data, &output)
+		if !errors.Is(err, ErrUnexpectedItemCount) {
+			t.Errorf("length mismatch error: got %v, want %v", err, ErrUnexpectedItemCount)
+		}
+	})
+}
+
+// Tests that the CBOR encoding of []T matches the expected wire format.
+func TestSliceEncoding(t *testing.T) {
+	// [1, 2, 3] should be: 83 (array of 3) 01 02 03
+	data, err := Marshal([]uint64{1, 2, 3})
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	expected := []byte{0x83, 0x01, 0x02, 0x03}
+	if !bytes.Equal(data, expected) {
+		t.Errorf("encoding: got %x, want %x", data, expected)
+	}
+}
+
+// Tests that Verify accepts CBOR arrays produced by slice encoding.
+func TestSliceVerify(t *testing.T) {
+	data, err := Marshal([]uint64{1, 2, 3})
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if err := Verify(data); err != nil {
+		t.Errorf("Verify error: %v", err)
+	}
+}
