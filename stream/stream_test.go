@@ -20,6 +20,54 @@ import (
 
 const cs = stream.ChunkSize
 
+func TestDecryptReaderTrailingDataWithEOF(t *testing.T) {
+	key := make([]byte, chacha20poly1305.KeySize)
+	for _, length := range []int{cs, 2 * cs} {
+		plaintext := make([]byte, length)
+		var ciphertext bytes.Buffer
+		w, err := stream.NewEncryptWriter(key, &ciphertext)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(plaintext); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		for _, trailing := range []bool{false, true} {
+			for _, dataWithEOF := range []bool{false, true} {
+				t.Run(fmt.Sprintf("len=%d,trailing=%t,dataWithEOF=%t", length, trailing, dataWithEOF), func(t *testing.T) {
+					data := bytes.Clone(ciphertext.Bytes())
+					if trailing {
+						data = append(data, 0xff)
+					}
+					var src io.Reader = bytes.NewReader(data)
+					if dataWithEOF {
+						// Return the final byte and io.EOF in the same Read call.
+						src = iotest.DataErrReader(src)
+					}
+					r, err := stream.NewDecryptReader(key, src)
+					if err != nil {
+						t.Fatal(err)
+					}
+					got, err := io.ReadAll(r)
+					if trailing {
+						if err == nil || err.Error() != "trailing data after end of encrypted file" {
+							t.Fatalf("expected trailing data error, got %v", err)
+						}
+					} else if err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(got, plaintext) {
+						t.Fatal("decrypted plaintext mismatch")
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestRoundTrip(t *testing.T) {
 	for _, length := range []int{0, 1000, cs - 1, cs, cs + 1, cs + 100, 2 * cs, 2*cs + 500} {
 		for _, stepSize := range []int{512, 600, 1000, cs - 1, cs, cs + 1} {

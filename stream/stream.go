@@ -97,7 +97,8 @@ func (r *DecryptReader) Read(p []byte) (int, error) {
 		// words, check for trailing data after a full-length final chunk.
 		// Hopefully, the underlying reader supports returning EOF even if it
 		// had previously returned an EOF to ReadFull.
-		if _, err := r.src.Read(make([]byte, 1)); err == nil {
+		// A Reader may return data and io.EOF together; reject the data first.
+		if n, err := r.src.Read(make([]byte, 1)); n > 0 || err == nil {
 			r.err = errors.New("trailing data after end of encrypted file")
 		} else if err != io.EOF {
 			r.err = fmt.Errorf("non-EOF error reading after end of encrypted file: %w", err)
