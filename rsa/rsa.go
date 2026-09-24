@@ -28,6 +28,7 @@ import (
 
 	"github.com/dark-bio/crypto-go/cbor"
 	"github.com/dark-bio/crypto-go/internal/base64ext"
+	"github.com/dark-bio/crypto-go/internal/jsonext"
 	"github.com/dark-bio/crypto-go/pem"
 )
 
@@ -263,6 +264,11 @@ func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 
 // PublicKey contains a 2048-bit RSA public key usable for verification, with
 // SHA256 as the underlying hash algorithm.
+//
+// The zero value is not a valid key, and using it panics. JSON decoding rejects
+// null, but a field missing from the input keeps the zero value without an
+// error. To detect a missing key, decode into a *PublicKey field and check it
+// for nil.
 type PublicKey struct {
 	inner *rsa.PublicKey
 }
@@ -396,7 +402,7 @@ func (k *PublicKey) MarshalPEM() string {
 }
 
 // MarshalText implements encoding.TextMarshaler.
-func (k *PublicKey) MarshalText() ([]byte, error) {
+func (k PublicKey) MarshalText() ([]byte, error) {
 	raw := k.Marshal()
 	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
 }
@@ -418,6 +424,11 @@ func (k *PublicKey) UnmarshalText(text []byte) error {
 	}
 	*k = *key
 	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler, rejecting null.
+func (k *PublicKey) UnmarshalJSON(data []byte) error {
+	return jsonext.UnmarshalText(data, k)
 }
 
 // Fingerprint returns a 256-bit unique identifier for this key. For RSA, that
@@ -476,7 +487,7 @@ func (k *PublicKey) VerifyHash(hash []byte, sig *Signature) error {
 type Signature [SignatureSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
-func (s *Signature) MarshalText() ([]byte, error) {
+func (s Signature) MarshalText() ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString(s[:])), nil
 }
 
@@ -493,11 +504,16 @@ func (s *Signature) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// UnmarshalJSON implements json.Unmarshaler, rejecting null.
+func (s *Signature) UnmarshalJSON(data []byte) error {
+	return jsonext.UnmarshalText(data, s)
+}
+
 // Fingerprint is a 256-bit unique identifier for an RSA key.
 type Fingerprint [FingerprintSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
-func (f *Fingerprint) MarshalText() ([]byte, error) {
+func (f Fingerprint) MarshalText() ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString(f[:])), nil
 }
 
@@ -512,6 +528,11 @@ func (f *Fingerprint) UnmarshalText(text []byte) error {
 	}
 	copy(f[:], raw)
 	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler, rejecting null.
+func (f *Fingerprint) UnmarshalJSON(data []byte) error {
+	return jsonext.UnmarshalText(data, f)
 }
 
 func reverseBytes(b []byte) []byte {

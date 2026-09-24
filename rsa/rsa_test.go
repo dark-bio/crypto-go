@@ -8,8 +8,12 @@ package rsa
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/dark-bio/crypto-go/internal/jsonext"
 )
 
 // Tests that a raw byte encoded RSA private key can be decoded and re-encoded
@@ -302,5 +306,65 @@ func TestSignVerify(t *testing.T) {
 	}
 	if err := public.Verify([]byte("wrong message"), signature); err == nil {
 		t.Error("verify succeeded")
+	}
+}
+
+// Tests that the text-encoded types marshal to the same JSON strings by value
+// and by pointer, round-trip through them, and reject null unless the target
+// is a pointer.
+func TestJSON(t *testing.T) {
+	secret := GenerateKey()
+	signature, err := secret.Sign([]byte("message"))
+	if err != nil {
+		t.Fatalf("failed to sign: %v", err)
+	}
+	fingerprint := secret.PublicKey().Fingerprint()
+
+	blob, err := json.Marshal(struct {
+		Key *PublicKey
+		Sig *Signature
+		Fp  *Fingerprint
+	}{secret.PublicKey(), signature, &fingerprint})
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+	byValue, err := json.Marshal(struct {
+		Key PublicKey
+		Sig Signature
+		Fp  Fingerprint
+	}{*secret.PublicKey(), *signature, fingerprint})
+	if err != nil {
+		t.Fatalf("failed to marshal by value: %v", err)
+	}
+	if string(byValue) != string(blob) {
+		t.Fatalf("marshal by value = %s, want %s", byValue, blob)
+	}
+	var back struct {
+		Key PublicKey
+		Sig Signature
+		Fp  Fingerprint
+	}
+	if err := json.Unmarshal(blob, &back); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if back.Key.Marshal() != secret.PublicKey().Marshal() || back.Sig != *signature || back.Fp != fingerprint {
+		t.Fatalf("round trip mismatch")
+	}
+	tests := []struct {
+		name   string
+		target any
+	}{
+		{name: "public key", target: new(PublicKey)},
+		{name: "signature", target: new(Signature)},
+		{name: "fingerprint", target: new(Fingerprint)},
+	}
+	for _, tt := range tests {
+		if err := json.Unmarshal([]byte("null"), tt.target); !errors.Is(err, jsonext.ErrNull) {
+			t.Error(tt.name)
+		}
+	}
+	var key *PublicKey
+	if err := json.Unmarshal([]byte("null"), &key); err != nil || key != nil {
+		t.Fatalf("null into a pointer = %v, %v, want nil, nil", key, err)
 	}
 }

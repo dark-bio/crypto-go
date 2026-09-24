@@ -32,6 +32,7 @@ import (
 	"github.com/dark-bio/crypto-go/cbor"
 	"github.com/dark-bio/crypto-go/internal/asn1ext"
 	"github.com/dark-bio/crypto-go/internal/base64ext"
+	"github.com/dark-bio/crypto-go/internal/jsonext"
 	"github.com/dark-bio/crypto-go/pem"
 )
 
@@ -285,6 +286,11 @@ func (k *SecretKey) NewReceiver(sessionKey *[EncapKeySize]byte, domain []byte) (
 }
 
 // PublicKey contains an X-Wing public key for encrypting HPKE messages.
+//
+// The zero value is not a valid key, and using it panics. JSON decoding rejects
+// null, but a field missing from the input keeps the zero value without an
+// error. To detect a missing key, decode into a *PublicKey field and check it
+// for nil.
 type PublicKey struct {
 	inner hpke.PublicKey
 }
@@ -430,7 +436,7 @@ func (k *PublicKey) UnmarshalCBOR(dec *cbor.Decoder) error {
 }
 
 // MarshalText encodes the public key as base64 text.
-func (k *PublicKey) MarshalText() ([]byte, error) {
+func (k PublicKey) MarshalText() ([]byte, error) {
 	raw := k.Marshal()
 	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
 }
@@ -454,11 +460,16 @@ func (k *PublicKey) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// UnmarshalJSON implements json.Unmarshaler, rejecting null.
+func (k *PublicKey) UnmarshalJSON(data []byte) error {
+	return jsonext.UnmarshalText(data, k)
+}
+
 // Fingerprint is a 256-bit unique identifier for an X-Wing key.
 type Fingerprint [FingerprintSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
-func (f *Fingerprint) MarshalText() ([]byte, error) {
+func (f Fingerprint) MarshalText() ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString(f[:])), nil
 }
 
@@ -473,6 +484,11 @@ func (f *Fingerprint) UnmarshalText(text []byte) error {
 	}
 	copy(f[:], raw)
 	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler, rejecting null.
+func (f *Fingerprint) UnmarshalJSON(data []byte) error {
+	return jsonext.UnmarshalText(data, f)
 }
 
 // Seal creates a standalone cryptographic construct encrypted to this public
