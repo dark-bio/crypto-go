@@ -2,23 +2,42 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 //
-// Source: https://github.com/FiloSottile/age/blob/v1.3.1/internal/stream/stream_test.go
+// Source: https://github.com/FiloSottile/age/blob/v1.3.2/internal/stream/stream_test.go
 
 package stream_test
 
 import (
 	"bytes"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"testing"
 	"testing/iotest"
 
-	"github.com/dark-bio/crypto-go/stream"
+	"github.com/dark-bio/crypto-go/stream/internal"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
 const cs = stream.ChunkSize
+
+// encrypt encrypts plaintext with key and returns the ciphertext.
+func encrypt(t *testing.T, key, plaintext []byte) []byte {
+	t.Helper()
+	buf := &bytes.Buffer{}
+	w, err := stream.NewEncryptWriter(key, buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(plaintext); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
 
 func TestRoundTrip(t *testing.T) {
 	for _, length := range []int{0, 1000, cs - 1, cs, cs + 1, cs + 100, 2 * cs, 2*cs + 500} {
@@ -37,13 +56,9 @@ func TestRoundTrip(t *testing.T) {
 
 func testRoundTrip(t *testing.T, stepSize, length int) {
 	src := make([]byte, length)
-	if _, err := rand.Read(src); err != nil {
-		t.Fatal(err)
-	}
+	rand.Read(src)
 	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
+	rand.Read(key)
 	var ciphertext []byte
 
 	t.Run("EncryptWriter", func(t *testing.T) {
@@ -203,9 +218,7 @@ func (t *trackingReaderAt) reset() {
 
 func TestDecryptReaderAt(t *testing.T) {
 	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
+	rand.Read(key)
 
 	// Create plaintext spanning exactly 3 chunks: 2 full chunks + partial third
 	// Chunk 0: [0, cs)
@@ -213,23 +226,8 @@ func TestDecryptReaderAt(t *testing.T) {
 	// Chunk 2: [2*cs, 2*cs+500)
 	plaintextSize := 2*cs + 500
 	plaintext := make([]byte, plaintextSize)
-	if _, err := rand.Read(plaintext); err != nil {
-		t.Fatal(err)
-	}
-
-	// Encrypt
-	buf := &bytes.Buffer{}
-	w, err := stream.NewEncryptWriter(key, buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write(plaintext); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	ciphertext := buf.Bytes()
+	rand.Read(plaintext)
+	ciphertext := encrypt(t, key, plaintext)
 
 	// Create tracking ReaderAt
 	tracker := &trackingReaderAt{r: bytes.NewReader(ciphertext)}
@@ -268,10 +266,7 @@ func TestDecryptReaderAt(t *testing.T) {
 
 		// Verify data correctness
 		if n > 0 && off >= 0 && off < int64(plaintextSize) {
-			end := int(off) + n
-			if end > plaintextSize {
-				end = plaintextSize
-			}
+			end := min(int(off)+n, plaintextSize)
 			if !bytes.Equal(p[:n], plaintext[off:end]) {
 				t.Errorf("%s: data mismatch", name)
 			}
@@ -413,22 +408,100 @@ func TestDecryptReaderAt(t *testing.T) {
 	checkRead("cross boundary 1-2", int64(2*cs-50), 100, 100, false, true)
 }
 
-func TestDecryptReaderAtEmpty(t *testing.T) {
+// eofReaderAt wraps a bytes.Reader and forces it to return io.EOF alongside a
+// read that successfully reaches the exact end of the data.
+type eofReaderAt struct {
+	r *bytes.Reader
+}
+
+func (e *eofReaderAt) ReadAt(p []byte, off int64) (int, error) {
+	n, err := e.r.ReadAt(p, off)
+	if err == nil && off+int64(n) == e.r.Size() {
+		err = io.EOF
+	}
+	return n, err
+}
+
+func TestDecryptReaderAtEOF(t *testing.T) {
 	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
+	rand.Read(key)
+
+	// Multiple chunks, so that reads reach the final chunk both in the
+	// constructor and through ReadAt.
+	plaintext := make([]byte, 2*cs+100)
+	rand.Read(plaintext)
+	ciphertext := encrypt(t, key, plaintext)
+
+	// An io.ReaderAt is allowed to return io.EOF alongside a successful read
+	// that reaches the end of the source; both the constructor (which reads
+	// the final chunk eagerly) and ReadAt must tolerate it.
+	er := &eofReaderAt{r: bytes.NewReader(ciphertext)}
+
+	ra, err := stream.NewDecryptReaderAt(key, er, int64(len(ciphertext)))
+	if err != nil {
+		t.Fatalf("NewDecryptReaderAt failed on EOF: %v", err)
 	}
 
-	// Create empty encrypted file
-	buf := &bytes.Buffer{}
-	w, err := stream.NewEncryptWriter(key, buf)
+	// Sequential small reads evict the final chunk from the cache, so it is
+	// read again through ReadAt, exercising its own EOF handling.
+	got, err := io.ReadAll(io.NewSectionReader(ra, 0, int64(len(plaintext))))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ReadAll failed on EOF: %v", err)
 	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
+	if !bytes.Equal(got, plaintext) {
+		t.Error("plaintext mismatch")
 	}
-	ciphertext := buf.Bytes()
+}
+
+// TestDecryptReaderTrailingData checks that data appended after a full-length
+// final chunk is rejected, including when the source returns the trailing byte
+// alongside io.EOF as permitted by io.Reader.
+func TestDecryptReaderTrailingData(t *testing.T) {
+	key := make([]byte, chacha20poly1305.KeySize)
+	rand.Read(key)
+
+	// A plaintext of exactly one full chunk, so the trailing data can only be
+	// detected by reading past the final chunk.
+	plaintext := make([]byte, cs)
+	rand.Read(plaintext)
+	ciphertext := encrypt(t, key, plaintext)
+	trailing := append(bytes.Clone(ciphertext), 0x42)
+
+	wrappers := map[string]func(io.Reader) io.Reader{
+		"plain":   func(r io.Reader) io.Reader { return r },
+		"dataErr": iotest.DataErrReader,
+	}
+	for name, wrap := range wrappers {
+		t.Run(name, func(t *testing.T) {
+			r, err := stream.NewDecryptReader(key, wrap(bytes.NewReader(trailing)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.ReadAll(r); err == nil {
+				t.Error("trailing data: expected error, got nil")
+			}
+
+			r, err = stream.NewDecryptReader(key, wrap(bytes.NewReader(ciphertext)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := io.ReadAll(r)
+			if err != nil {
+				t.Errorf("valid file: got err=%v, want nil", err)
+			}
+			if !bytes.Equal(got, plaintext) {
+				t.Error("valid file: plaintext mismatch")
+			}
+		})
+	}
+}
+
+func TestDecryptReaderAtEmpty(t *testing.T) {
+	key := make([]byte, chacha20poly1305.KeySize)
+	rand.Read(key)
+
+	// Create empty encrypted file
+	ciphertext := encrypt(t, key, nil)
 
 	tracker := &trackingReaderAt{r: bytes.NewReader(ciphertext)}
 	ra, err := stream.NewDecryptReaderAt(key, tracker, int64(len(ciphertext)))
@@ -470,28 +543,12 @@ func TestDecryptReaderAtEmpty(t *testing.T) {
 
 func TestDecryptReaderAtSingleChunk(t *testing.T) {
 	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
+	rand.Read(key)
 
 	// Single chunk, not full
 	plaintext := make([]byte, 1000)
-	if _, err := rand.Read(plaintext); err != nil {
-		t.Fatal(err)
-	}
-
-	buf := &bytes.Buffer{}
-	w, err := stream.NewEncryptWriter(key, buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write(plaintext); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	ciphertext := buf.Bytes()
+	rand.Read(plaintext)
+	ciphertext := encrypt(t, key, plaintext)
 
 	tracker := &trackingReaderAt{r: bytes.NewReader(ciphertext)}
 	ra, err := stream.NewDecryptReaderAt(key, tracker, int64(len(ciphertext)))
@@ -534,28 +591,12 @@ func TestDecryptReaderAtSingleChunk(t *testing.T) {
 
 func TestDecryptReaderAtFullChunks(t *testing.T) {
 	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
+	rand.Read(key)
 
 	// Exactly 2 full chunks
 	plaintext := make([]byte, 2*cs)
-	if _, err := rand.Read(plaintext); err != nil {
-		t.Fatal(err)
-	}
-
-	buf := &bytes.Buffer{}
-	w, err := stream.NewEncryptWriter(key, buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write(plaintext); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	ciphertext := buf.Bytes()
+	rand.Read(plaintext)
+	ciphertext := encrypt(t, key, plaintext)
 
 	tracker := &trackingReaderAt{r: bytes.NewReader(ciphertext)}
 	ra, err := stream.NewDecryptReaderAt(key, tracker, int64(len(ciphertext)))
@@ -596,35 +637,15 @@ func TestDecryptReaderAtFullChunks(t *testing.T) {
 
 func TestDecryptReaderAtWrongKey(t *testing.T) {
 	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
-
+	rand.Read(key)
 	plaintext := make([]byte, 1000)
-	if _, err := rand.Read(plaintext); err != nil {
-		t.Fatal(err)
-	}
-
-	buf := &bytes.Buffer{}
-	w, err := stream.NewEncryptWriter(key, buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write(plaintext); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	ciphertext := buf.Bytes()
+	rand.Read(plaintext)
+	ciphertext := encrypt(t, key, plaintext)
 
 	// Try to decrypt with wrong key
 	wrongKey := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(wrongKey); err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = stream.NewDecryptReaderAt(wrongKey, bytes.NewReader(ciphertext), int64(len(ciphertext)))
+	rand.Read(wrongKey)
+	_, err := stream.NewDecryptReaderAt(wrongKey, bytes.NewReader(ciphertext), int64(len(ciphertext)))
 	if err == nil {
 		t.Error("wrong key: expected error, got nil")
 	}
@@ -632,30 +653,13 @@ func TestDecryptReaderAtWrongKey(t *testing.T) {
 
 func TestDecryptReaderAtInvalidSize(t *testing.T) {
 	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
-
+	rand.Read(key)
 	plaintext := make([]byte, 1000)
-	if _, err := rand.Read(plaintext); err != nil {
-		t.Fatal(err)
-	}
-
-	buf := &bytes.Buffer{}
-	w, err := stream.NewEncryptWriter(key, buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write(plaintext); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	ciphertext := buf.Bytes()
+	rand.Read(plaintext)
+	ciphertext := encrypt(t, key, plaintext)
 
 	// Wrong size (too small)
-	_, err = stream.NewDecryptReaderAt(key, bytes.NewReader(ciphertext), int64(len(ciphertext)-1))
+	_, err := stream.NewDecryptReaderAt(key, bytes.NewReader(ciphertext), int64(len(ciphertext)-1))
 	if err == nil {
 		t.Error("wrong size (small): expected error, got nil")
 	}
@@ -673,64 +677,44 @@ func TestDecryptReaderAtInvalidSize(t *testing.T) {
 	if err == nil {
 		t.Error("invalid size (empty final chunk): expected error, got nil")
 	}
+
+	// Negative sizes and sizes that would overflow the chunk count computation
+	// must be rejected with an error rather than a panic.
+	for _, size := range []int64{-1, -70000, math.MaxInt64, math.MaxInt64 - 200, math.MaxInt64 - 65550} {
+		if _, err := stream.EncryptedChunkCount(size); err == nil {
+			t.Errorf("EncryptedChunkCount(%d): expected error, got nil", size)
+		}
+		if _, err := stream.NewDecryptReaderAt(key, bytes.NewReader(ciphertext), size); err == nil {
+			t.Errorf("NewDecryptReaderAt(%d): expected error, got nil", size)
+		}
+	}
 }
 
 func TestDecryptReaderAtTruncated(t *testing.T) {
 	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
-
+	rand.Read(key)
 	plaintext := make([]byte, 2*cs+500)
-	if _, err := rand.Read(plaintext); err != nil {
-		t.Fatal(err)
-	}
+	rand.Read(plaintext)
+	ciphertext := encrypt(t, key, plaintext)
 
-	buf := &bytes.Buffer{}
-	w, err := stream.NewEncryptWriter(key, buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write(plaintext); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	ciphertext := buf.Bytes()
-
-	// Truncate ciphertext but lie about size
+	// Truncate ciphertext but lie about size. The source ending before the
+	// expected end of the final chunk must be reported as an unexpected EOF,
+	// not as a decryption failure.
 	truncated := ciphertext[:len(ciphertext)-100]
-	_, err = stream.NewDecryptReaderAt(key, bytes.NewReader(truncated), int64(len(ciphertext)))
-	if err == nil {
-		t.Error("truncated: expected error, got nil")
+	_, err := stream.NewDecryptReaderAt(key, bytes.NewReader(truncated), int64(len(ciphertext)))
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("truncated: got err=%v, want io.ErrUnexpectedEOF", err)
 	}
 }
 
 func TestDecryptReaderAtTruncatedChunk(t *testing.T) {
 	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
+	rand.Read(key)
 
 	// Create 4 chunks: 3 full + 1 partial
 	plaintext := make([]byte, 3*cs+500)
-	if _, err := rand.Read(plaintext); err != nil {
-		t.Fatal(err)
-	}
-
-	buf := &bytes.Buffer{}
-	w, err := stream.NewEncryptWriter(key, buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write(plaintext); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	ciphertext := buf.Bytes()
+	rand.Read(plaintext)
+	ciphertext := encrypt(t, key, plaintext)
 
 	// Truncate to 3 chunks (remove the actual final chunk)
 	// The third chunk was NOT encrypted with the last chunk flag,
@@ -739,7 +723,7 @@ func TestDecryptReaderAtTruncatedChunk(t *testing.T) {
 	truncatedSize := int64(3 * encChunkSize)
 	truncated := ciphertext[:truncatedSize]
 
-	_, err = stream.NewDecryptReaderAt(key, bytes.NewReader(truncated), truncatedSize)
+	_, err := stream.NewDecryptReaderAt(key, bytes.NewReader(truncated), truncatedSize)
 	if err == nil {
 		t.Error("truncated at chunk boundary: expected error, got nil")
 	}
@@ -747,30 +731,13 @@ func TestDecryptReaderAtTruncatedChunk(t *testing.T) {
 
 func TestDecryptReaderAtConcurrent(t *testing.T) {
 	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
+	rand.Read(key)
 
 	// Create plaintext spanning 3 chunks: 2 full + partial
 	plaintextSize := 2*cs + 500
 	plaintext := make([]byte, plaintextSize)
-	if _, err := rand.Read(plaintext); err != nil {
-		t.Fatal(err)
-	}
-
-	// Encrypt
-	buf := &bytes.Buffer{}
-	w, err := stream.NewEncryptWriter(key, buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write(plaintext); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	ciphertext := buf.Bytes()
+	rand.Read(plaintext)
+	ciphertext := encrypt(t, key, plaintext)
 
 	ra, err := stream.NewDecryptReaderAt(key, bytes.NewReader(ciphertext), int64(len(ciphertext)))
 	if err != nil {
@@ -909,32 +876,15 @@ func TestDecryptReaderAtConcurrent(t *testing.T) {
 
 func TestDecryptReaderAtCorrupted(t *testing.T) {
 	key := make([]byte, chacha20poly1305.KeySize)
-	if _, err := rand.Read(key); err != nil {
-		t.Fatal(err)
-	}
-
+	rand.Read(key)
 	plaintext := make([]byte, 2*cs+500)
-	if _, err := rand.Read(plaintext); err != nil {
-		t.Fatal(err)
-	}
-
-	buf := &bytes.Buffer{}
-	w, err := stream.NewEncryptWriter(key, buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := w.Write(plaintext); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
-	ciphertext := bytes.Clone(buf.Bytes())
+	rand.Read(plaintext)
+	ciphertext := encrypt(t, key, plaintext)
 
 	// Corrupt final chunk - should fail in constructor
 	corruptedFinal := bytes.Clone(ciphertext)
 	corruptedFinal[len(corruptedFinal)-10] ^= 0xFF
-	_, err = stream.NewDecryptReaderAt(key, bytes.NewReader(corruptedFinal), int64(len(corruptedFinal)))
+	_, err := stream.NewDecryptReaderAt(key, bytes.NewReader(corruptedFinal), int64(len(corruptedFinal)))
 	if err == nil {
 		t.Error("corrupted final: expected error, got nil")
 	}
