@@ -7,6 +7,11 @@
 // Package rsa provides RSA-2048-SHA256 signing and verification.
 //
 // https://datatracker.ietf.org/doc/html/rfc8017
+//
+// RSA-2048 with PKCS#1 v1.5 padding over SHA-256, the classical scheme kept
+// for places where a boot ROM or a legacy system dictates it. New designs
+// should use the xdsa package. Only 2048-bit moduli with the exponent 65537
+// are accepted, and encryption is deliberately not exposed.
 package rsa
 
 import (
@@ -43,10 +48,25 @@ const (
 )
 
 var (
-	ErrUnexpectedPemTag    = errors.New("rsa: invalid PEM tag")
+	// ErrUnexpectedPemTag is returned by ParseSecretKeyPEM and ParsePublicKeyPEM
+	// when the PEM block type is not "PRIVATE KEY" or "PUBLIC KEY" respectively.
+	// The wrapping error carries the type found.
+	ErrUnexpectedPemTag = errors.New("rsa: invalid PEM tag")
+
+	// ErrUnexpectedAlgorithm is returned by the DER parsers, and through them by
+	// the PEM parsers, when the key names an algorithm other than RSA.
 	ErrUnexpectedAlgorithm = errors.New("rsa: not an RSA key")
-	ErrMalformedKey        = errors.New("rsa: malformed key")
-	ErrInvalidSignature    = errors.New("rsa: signature verification failed")
+
+	// ErrMalformedKey is returned by every key parser when the key cannot be
+	// parsed or its contents are unusable. Causes include a modulus that is not
+	// 2048 bits, an exponent other than 65537 or a non-canonical encoding. The
+	// wrapping error names the problem.
+	ErrMalformedKey = errors.New("rsa: malformed key")
+
+	// ErrInvalidSignature is returned by PublicKey.Verify and PublicKey.VerifyHash
+	// when the signature does not verify under the key for the message or hash,
+	// or it is not a well formed RSA-2048 signature at all.
+	ErrInvalidSignature = errors.New("rsa: signature verification failed")
 )
 
 // SecretKey contains a 2048-bit RSA private key usable for signing, with SHA256
@@ -375,11 +395,13 @@ func (k *PublicKey) MarshalPEM() string {
 	return string(pem.Encode("PUBLIC KEY", k.MarshalDER()))
 }
 
+// MarshalText implements encoding.TextMarshaler.
 func (k *PublicKey) MarshalText() ([]byte, error) {
 	raw := k.Marshal()
 	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
 }
 
+// UnmarshalText implements encoding.TextUnmarshaler.
 func (k *PublicKey) UnmarshalText(text []byte) error {
 	raw, err := base64ext.DecodeString(string(text))
 	if err != nil {

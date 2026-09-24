@@ -18,7 +18,13 @@ import (
 
 // Errors returned by confirmation key operations.
 var (
+	// ErrInvalidKeyType is returned when decoding a cnf claim whose COSE key
+	// type does not match the requested key type. The wrapping error names both.
 	ErrInvalidKeyType = errors.New("claims: unexpected key type")
+
+	// ErrInvalidKeySize is returned when decoding a cnf claim whose key bytes
+	// have the wrong size for the requested key type. The wrapping error names
+	// both sizes.
 	ErrInvalidKeySize = errors.New("claims: unexpected key size")
 )
 
@@ -30,7 +36,13 @@ type ConfirmKey interface {
 
 // Confirm binds a public key to the token via the cnf claim (key 8, RFC 8747).
 // The COSE_Key wrapping is handled internally.
+//
+// A verified token authenticates this key binding, but does not prove that
+// the presenter possesses the corresponding private key. Applications must
+// check that separately using their protocol's proof-of-possession mechanism.
 type Confirm[T ConfirmKey] struct {
+	// Cnf is the cnf claim value, the bound key in its COSE_Key envelope. Use
+	// NewConfirm and Key to set and read it.
 	Cnf confirmValue[T] `cbor:"8,key"`
 }
 

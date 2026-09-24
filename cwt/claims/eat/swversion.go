@@ -6,8 +6,12 @@
 
 package eat
 
-// SWVersion is the software version identifier (key 271).
+// SWVersion is the software version identifier (key 271). It encodes as a
+// 1-element array per RFC 9711 Section 4.2.7: [version: tstr]. The optional
+// scheme is not supported.
 type SWVersion struct {
+	// SWVersion holds the version in its array encoding. Use NewSWVersion and
+	// Version to set and read it.
 	SWVersion swVersionValue `cbor:"271,key"`
 }
 

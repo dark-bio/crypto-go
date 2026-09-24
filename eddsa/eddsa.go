@@ -7,6 +7,9 @@
 // Package eddsa provides Ed25519 digital signatures.
 //
 // https://datatracker.ietf.org/doc/html/rfc8032
+//
+// Ed25519 on its own, the classical half of the composite scheme in the xdsa
+// package. Prefer that package unless a protocol demands plain Ed25519.
 package eddsa
 
 import (
@@ -46,11 +49,28 @@ const (
 var OID = asn1.ObjectIdentifier{1, 3, 101, 112}
 
 var (
-	ErrUnexpectedPemTag    = errors.New("eddsa: invalid PEM tag")
+	// ErrUnexpectedPemTag is returned by ParseSecretKeyPEM and ParsePublicKeyPEM
+	// when the PEM block type is not "PRIVATE KEY" or "PUBLIC KEY" respectively.
+	// The wrapping error carries the type found.
+	ErrUnexpectedPemTag = errors.New("eddsa: invalid PEM tag")
+
+	// ErrUnexpectedAlgorithm is returned by the DER parsers, and through them by
+	// the PEM parsers, when the key names an algorithm other than Ed25519.
 	ErrUnexpectedAlgorithm = errors.New("eddsa: not an Ed25519 key")
-	ErrMalformedKey        = errors.New("eddsa: malformed key")
-	ErrTrailingData        = errors.New("eddsa: trailing data in key encoding")
-	ErrInvalidSignature    = errors.New("eddsa: signature verification failed")
+
+	// ErrMalformedKey is returned by the fallible key constructors when a key
+	// encoding cannot be parsed or its contents are unusable. Causes include a
+	// seed or point of the wrong size, an invalid curve point or unexpected
+	// algorithm parameters. The wrapping error names the problem.
+	ErrMalformedKey = errors.New("eddsa: malformed key")
+
+	// ErrTrailingData is returned by the DER parsers, and through them by the
+	// PEM parsers, when bytes follow the key structure or its last field.
+	ErrTrailingData = errors.New("eddsa: trailing data in key encoding")
+
+	// ErrInvalidSignature is returned by PublicKey.Verify when the signature
+	// does not verify under the key for the message.
+	ErrInvalidSignature = errors.New("eddsa: signature verification failed")
 )
 
 // SecretKey contains an Ed25519 private key usable for signing.

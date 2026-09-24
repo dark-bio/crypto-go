@@ -8,6 +8,16 @@
 //
 // https://datatracker.ietf.org/doc/html/rfc9180
 // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem
+//
+// Messages are encrypted to a public key with X-Wing, a hybrid of ML-KEM-768
+// and X25519, and sealed with ChaCha20-Poly1305. Encryption and decryption use
+// an application domain, prefixed with DomainPrefix, which both sides must
+// agree on. The ciphertext also authenticates a second message that must be
+// supplied separately.
+//
+// A Sender and Receiver pair shares one encapsulated key across many messages,
+// which must be opened in the order they were sealed. The domain is fixed when
+// the contexts are created.
 package xhpke
 
 import (
@@ -51,12 +61,37 @@ const (
 var OID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 62253, 25722}
 
 var (
-	ErrUnexpectedPemTag    = errors.New("xhpke: invalid PEM tag")
+	// ErrUnexpectedPemTag is returned by ParseSecretKeyPEM and ParsePublicKeyPEM
+	// when the PEM block type is not "PRIVATE KEY" or "PUBLIC KEY" respectively.
+	// The wrapping error carries the type found.
+	ErrUnexpectedPemTag = errors.New("xhpke: invalid PEM tag")
+
+	// ErrUnexpectedAlgorithm is returned by the DER parsers, and through them by
+	// the PEM parsers, when the key names an algorithm other than X-Wing.
 	ErrUnexpectedAlgorithm = errors.New("xhpke: not an X-Wing key")
-	ErrMalformedKey        = errors.New("xhpke: malformed key")
-	ErrTrailingData        = errors.New("xhpke: trailing data in key encoding")
-	ErrSealFailed          = errors.New("xhpke: sealing failed")
-	ErrOpenFailed          = errors.New("xhpke: opening failed")
+
+	// ErrMalformedKey is returned by the fallible key constructors when a key
+	// encoding cannot be parsed or its contents are unusable. Causes include a
+	// wrong size, an ML-KEM coefficient out of range, unexpected algorithm
+	// parameters or an unsupported PKCS#8 version. The wrapping error names the
+	// problem.
+	ErrMalformedKey = errors.New("xhpke: malformed key")
+
+	// ErrTrailingData is returned by the DER parsers, and through them by the
+	// PEM parsers, when bytes follow the key structure or its last field.
+	ErrTrailingData = errors.New("xhpke: trailing data in key encoding")
+
+	// ErrSealFailed is returned by PublicKey.Seal, PublicKey.NewSender and
+	// Sender.Seal when encrypting to the public key fails. The wrapping error
+	// carries the HPKE error text.
+	ErrSealFailed = errors.New("xhpke: sealing failed")
+
+	// ErrOpenFailed is returned by SecretKey.Open, SecretKey.NewReceiver and
+	// Receiver.Open when decrypting fails. Causes include a malformed
+	// encapsulated key, the wrong secret key, a tampered ciphertext or a
+	// mismatched authenticated message. The wrapping error carries the HPKE
+	// error text, which does not tell these apart.
+	ErrOpenFailed = errors.New("xhpke: opening failed")
 )
 
 // SecretKey contains an X-Wing private key for decrypting HPKE messages.
@@ -446,8 +481,8 @@ func (f *Fingerprint) UnmarshalText(text []byte) error {
 // not included).
 //
 // The method returns the encapsulated session key and the ciphertext separately.
-// To open it on the other side needs transmitting both components along with
-// `msgToAuth`.
+// Opening it on the other side with SecretKey.Open needs both components along
+// with msgToAuth.
 //
 // Note: X-Wing uses Base mode (no sender authentication). The recipient cannot
 // verify the sender's identity from the ciphertext alone.

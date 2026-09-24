@@ -6,8 +6,52 @@
 
 // Package cose provides COSE wrappers for xDSA and xHPKE.
 //
-// https://datatracker.ietf.org/doc/html/rfc8152
+// https://datatracker.ietf.org/doc/html/rfc9052
 // https://datatracker.ietf.org/doc/html/draft-ietf-cose-hpke
+//
+// Signatures are COSE_Sign1 envelopes carrying the signer's fingerprint and a
+// timestamp in the protected header. Encryption is COSE_Encrypt0 around a
+// signed envelope, so every message created by Seal is also signed. Payloads
+// and authenticated messages can be any values the cbor package encodes.
+// Signing, verification, encryption, and decryption use an application domain,
+// prefixed with DomainPrefix, which both sides must agree on.
+//
+// # Domain separation and freshness
+//
+// Choose distinct domains for distinct application operations. Domains prevent
+// a message for one purpose from being accepted for another; they do not stop
+// repeated use within the same domain. Verification accepts a signature whose
+// timestamp is at most maxDrift seconds in the past or future. A nil maxDrift
+// skips this timestamp check. Applications that require one-time acceptance
+// must also track a message identifier, nonce, or challenge to reject replays.
+//
+// # Wire profile
+//
+// Interoperating implementations must match these Dark Bio conventions:
+//
+//   - Envelopes are untagged COSE_Sign1 and COSE_Encrypt0 arrays. CBOR tags are
+//     not accepted. Headers use the cbor package's deterministic integer-key
+//     maps.
+//   - The private algorithm IDs are AlgorithmXDSA (-70000) and AlgorithmXHPKE
+//     (-70001). The protected kid is the appropriate public key's fingerprint.
+//     Signatures require the private timestamp header HeaderTimestamp (-70002)
+//     and name it in crit.
+//   - For signatures, the Sig_structure external_aad is the CBOR encoding of
+//     [bstr(DomainPrefix || domain), msgToAuth]. An embedded payload is the
+//     CBOR encoding of the caller's value.
+//   - For SignDetached, the caller's message is authenticated in that
+//     external_aad, while the Sig_structure payload is an empty byte string and
+//     the envelope payload is null. A generic COSE detached-payload API that
+//     puts the caller's message in the Sig_structure payload must be adapted to
+//     this convention.
+//   - For encryption, the Enc_structure external_aad is the CBOR encoding of
+//     msgToAuth; the complete encoded Enc_structure is passed as HPKE AAD. HPKE
+//     key derivation uses DomainPrefix || domain as its info. The X-Wing
+//     encapsulated key is carried in unprotected header -4.
+//
+// Here bstr denotes a CBOR byte string and || denotes byte concatenation. The
+// domain and msgToAuth are not included in the returned envelope; both parties
+// must know them or transmit them separately.
 package cose
 
 import (
@@ -20,12 +64,10 @@ import (
 	"github.com/dark-bio/crypto-go/xhpke"
 )
 
-// DomainPrefix is the prefix of a public string known to both parties during
-// cryptographic operation, with the purpose of binding the keys used to some
-// application context.
-//
-// The final domain will be this prefix concatenated with another contextual one
-// from an app layer action.
+// DomainPrefix is prepended to the caller's application domain for signature
+// authentication and HPKE key derivation. Both parties must use the same bytes.
+// Distinct domains separate application purposes; replay detection within a
+// domain is the application's responsibility.
 const DomainPrefix = xhpke.DomainPrefix
 
 // Private COSE algorithm / key-type identifiers.
@@ -42,16 +84,44 @@ const (
 	HeaderTimestamp = -70002
 )
 
-// Error types for COSE operations
+// Errors returned by COSE operations.
 var (
+	// ErrUnexpectedAlgorithm is returned when a protected header names an
+	// algorithm other than the required one, or when its crit list is not the
+	// expected one. The wrapping error names both algorithms.
 	ErrUnexpectedAlgorithm = errors.New("cose: unexpected algorithm")
-	ErrUnexpectedKey       = errors.New("cose: unexpected key")
-	ErrUnexpectedPayload   = errors.New("cose: unexpected payload in detached signature")
-	ErrMissingPayload      = errors.New("cose: missing payload in embedded signature")
-	ErrInvalidSignature    = errors.New("cose: signature verification failed")
-	ErrStaleSignature      = errors.New("cose: signature stale")
+
+	// ErrUnexpectedKey is returned when the key identifier in a protected header
+	// does not match the verifier's or the recipient's key. Signer and Recipient
+	// look the right key up without verifying.
+	ErrUnexpectedKey = errors.New("cose: unexpected key")
+
+	// ErrUnexpectedPayload is returned by VerifyDetached and VerifyDetachedAt
+	// when the envelope carries an embedded payload.
+	ErrUnexpectedPayload = errors.New("cose: unexpected payload in detached signature")
+
+	// ErrMissingPayload is returned by Verify, VerifyAt and Peek when the
+	// envelope carries no payload.
+	ErrMissingPayload = errors.New("cose: missing payload in embedded signature")
+
+	// ErrInvalidSignature is returned when the xDSA signature does not verify.
+	// The wrapping error carries the underlying error.
+	ErrInvalidSignature = errors.New("cose: signature verification failed")
+
+	// ErrStaleSignature is returned when the signature timestamp lies further
+	// from the time of the check than maxDrift allows. The wrapping error names
+	// both values in seconds.
+	ErrStaleSignature = errors.New("cose: signature stale")
+
+	// ErrInvalidEncapKeySize is returned by Decrypt, and through it by Open,
+	// when the unprotected header carries an encapsulated key of the wrong size.
 	ErrInvalidEncapKeySize = errors.New("cose: invalid encapsulated key size")
-	ErrDecryptionFailed    = errors.New("cose: decryption failed")
+
+	// ErrDecryptionFailed is returned when opening the ciphertext fails, due to
+	// the wrong key, tampered data or a mismatched authenticated message. It is
+	// also returned when Encrypt, or Seal through it, fails. The wrapping error
+	// carries the xHPKE error text.
+	ErrDecryptionFailed = errors.New("cose: decryption failed")
 )
 
 // sigProtectedHeader is the protected header for COSE_Sign1.
@@ -151,14 +221,18 @@ type sigAAD struct {
 }
 
 // SignDetached creates a COSE_Sign1 digital signature without an embedded
-// payload (i.e. payload is empty).
+// payload (the envelope payload is null).
+//
+// The caller's message is included in external_aad, and the payload in the
+// signature input is empty. See the package's wire profile for
+// interoperability.
 //
 // Uses the current system time as the signature timestamp. For testing or
 // custom timestamps, use SignDetachedAt.
 //
 //   - msgToAuth: The message to sign (not embedded in COSE_Sign1)
 //   - signer: The xDSA secret key to sign with
-//   - domain: Application domain for replay protection
+//   - domain: Application domain for separating protocol purposes
 //
 // Returns the serialized COSE_Sign1 structure.
 func SignDetached(msgToAuth any, signer xdsa.Signer, domain []byte) ([]byte, error) {
@@ -170,7 +244,7 @@ func SignDetached(msgToAuth any, signer xdsa.Signer, domain []byte) ([]byte, err
 //
 //   - msgToAuth: The message to sign (not embedded in COSE_Sign1)
 //   - signer: The xDSA secret key to sign with
-//   - domain: Application domain for replay protection
+//   - domain: Application domain for separating protocol purposes
 //   - timestamp: Unix timestamp in seconds to embed in the protected header
 //
 // Returns the serialized COSE_Sign1 structure.
@@ -190,7 +264,7 @@ func SignDetachedAt(msgToAuth any, signer xdsa.Signer, domain []byte, timestamp 
 //   - msgToEmbed: The message to sign (embedded in COSE_Sign1)
 //   - msgToAuth: Additional authenticated data (not embedded, but signed)
 //   - signer: The xDSA secret key to sign with
-//   - domain: Application domain for replay protection
+//   - domain: Application domain for separating protocol purposes
 //
 // Returns the serialized COSE_Sign1 structure.
 func Sign(msgToEmbed, msgToAuth any, signer xdsa.Signer, domain []byte) ([]byte, error) {
@@ -202,7 +276,7 @@ func Sign(msgToEmbed, msgToAuth any, signer xdsa.Signer, domain []byte) ([]byte,
 //   - msgToEmbed: The message to sign (embedded in COSE_Sign1)
 //   - msgToAuth: Additional authenticated data (not embedded, but signed)
 //   - signer: The xDSA secret key to sign with
-//   - domain: Application domain for replay protection
+//   - domain: Application domain for separating protocol purposes
 //   - timestamp: Unix timestamp in seconds to embed in the protected header
 //
 // Returns the serialized COSE_Sign1 structure.
@@ -322,8 +396,10 @@ func signDetachedAt(msgToAuth []byte, signer xdsa.Signer, domain []byte, timesta
 //   - msgToCheck: The serialized COSE_Sign1 structure (with null payload)
 //   - msgToAuth: The same message used during signing (verified but not embedded)
 //   - verifier: The xDSA public key to verify against
-//   - domain: Application domain for replay protection
-//   - maxDrift: Signatures more in the past or future are rejected
+//   - domain: Application domain for separating protocol purposes
+//   - maxDrift: Maximum allowed timestamp difference in seconds, past or
+//     future. A value of n accepts differences up to and including n; nil
+//     skips the check.
 func VerifyDetached(msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64) error {
 	return VerifyDetachedAt(msgToCheck, msgToAuth, verifier, domain, maxDrift, time.Now().Unix())
 }
@@ -334,8 +410,10 @@ func VerifyDetached(msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, 
 //   - msgToCheck: The serialized COSE_Sign1 structure (with null payload)
 //   - msgToAuth: The same message used during signing (verified but not embedded)
 //   - verifier: The xDSA public key to verify against
-//   - domain: Application domain for replay protection
-//   - maxDrift: Signatures more in the past or future are rejected
+//   - domain: Application domain for separating protocol purposes
+//   - maxDrift: Maximum allowed timestamp difference in seconds, past or
+//     future. A value of n accepts differences up to and including n; nil
+//     skips the check.
 //   - now: Unix timestamp in seconds to use for drift checking
 func VerifyDetachedAt(msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) error {
 	auth, err := cbor.Marshal(msgToAuth)
@@ -405,8 +483,10 @@ func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, doma
 //   - msgToCheck: The serialized COSE_Sign1 structure
 //   - msgToAuth: The same additional authenticated data used during signing
 //   - verifier: The xDSA public key to verify against
-//   - domain: Application domain for replay protection
-//   - maxDrift: Signatures more in the past or future are rejected
+//   - domain: Application domain for separating protocol purposes
+//   - maxDrift: Maximum allowed timestamp difference in seconds, past or
+//     future. A value of n accepts differences up to and including n; nil
+//     skips the check.
 //
 // Returns the CBOR-decoded payload if verification succeeds.
 func Verify[T any](msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64) (T, error) {
@@ -419,8 +499,10 @@ func Verify[T any](msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey, d
 //   - msgToCheck: The serialized COSE_Sign1 structure
 //   - msgToAuth: The same additional authenticated data used during signing
 //   - verifier: The xDSA public key to verify against
-//   - domain: Application domain for replay protection
-//   - maxDrift: Signatures more in the past or future are rejected
+//   - domain: Application domain for separating protocol purposes
+//   - maxDrift: Maximum allowed timestamp difference in seconds, past or
+//     future. A value of n accepts differences up to and including n; nil
+//     skips the check.
 //   - now: Unix timestamp in seconds to use for drift checking
 //
 // Returns the CBOR-decoded payload if verification succeeds.
@@ -649,7 +731,9 @@ func Encrypt(sign1 []byte, msgToAuth any, recipient *xhpke.PublicKey, domain []b
 //   - recipient: The xHPKE secret key to decrypt with
 //   - sender: The xDSA public key to verify the signature against
 //   - domain: Application domain for HPKE key derivation
-//   - maxDrift: Signatures more in the past or future are rejected
+//   - maxDrift: Maximum allowed timestamp difference in seconds, past or
+//     future. A value of n accepts differences up to and including n; nil
+//     skips the check.
 //
 // Returns the CBOR-decoded payload if decryption and verification succeed.
 func Open[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, sender *xdsa.PublicKey, domain []byte, maxDrift *uint64) (T, error) {
@@ -664,7 +748,9 @@ func Open[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, se
 //   - recipient: The xHPKE secret key to decrypt with
 //   - sender: The xDSA public key to verify the signature against
 //   - domain: Application domain for HPKE key derivation
-//   - maxDrift: Signatures more in the past or future are rejected
+//   - maxDrift: Maximum allowed timestamp difference in seconds, past or
+//     future. A value of n accepts differences up to and including n; nil
+//     skips the check.
 //   - now: Unix timestamp in seconds to use for drift checking
 //
 // Returns the CBOR-decoded payload if decryption and verification succeed.

@@ -16,6 +16,7 @@ import (
 
 // Marshaler is the interface for types to marshal themselves to CBOR.
 type Marshaler interface {
+	// MarshalCBOR appends the type's CBOR encoding to the encoder.
 	MarshalCBOR(enc *Encoder) error
 }
 
@@ -23,10 +24,12 @@ type Marshaler interface {
 // Implementations must use the Decoder's methods to decode values, ensuring
 // that type restrictions are enforced even for custom types.
 type Unmarshaler interface {
+	// UnmarshalCBOR decodes the type from the decoder's next item.
 	UnmarshalCBOR(dec *Decoder) error
 }
 
 // Marshal encodes a value to CBOR. Supported types:
+//   - bool: booleans
 //   - uint, uint8, uint16, uint32, uint64: positive integers
 //   - int, int8, int16, int32, int64: signed integers
 //   - string: UTF-8 text strings
@@ -35,7 +38,16 @@ type Unmarshaler interface {
 //   - [N]T: CBOR arrays with length enforcement on decode
 //   - structs with `cbor:"_,array"` tag: CBOR arrays (fields in order)
 //   - structs with `cbor:"N,key"` tags: CBOR maps with integer keys
+//   - Null: CBOR null
+//   - Unit: an empty CBOR array
+//   - Option[T]: CBOR null, or the inner value when Some is set
+//   - Raw: pre-encoded CBOR bytes, copied without validation
+//   - *T: the pointed-to value
 //   - types implementing Marshaler: custom CBOR encoding
+//
+// A nil slice or pointer returns ErrUnexpectedNil unless it sits in a struct
+// field tagged optional. Raw bytes are copied verbatim, so use Verify on the
+// result when it must meet this package's rules.
 func Marshal(v any) ([]byte, error) {
 	enc := NewEncoder()
 	if err := enc.Encode(v); err != nil {
@@ -49,8 +61,8 @@ func (enc *Encoder) Encode(v any) error {
 	return encodeValue(enc, reflect.ValueOf(v), false)
 }
 
-// Unit is a special type that encodes as an empty CBOR array, matching Rust's () unit type.
-// Use this for "nothing" values like detached signature payloads.
+// Unit is a special type that encodes as an empty CBOR array, matching Rust's
+// () unit type.
 type Unit struct{}
 
 // unitType is used for type comparison in reflection.
@@ -59,11 +71,16 @@ var unitType = reflect.TypeOf(Unit{})
 // nullType is used for type comparison in reflection.
 var nullType = reflect.TypeOf(Null{})
 
-// Option represents an optional value that encodes as CBOR null when None.
-// Use this for top-level optional values; for struct fields, use the "optional" tag instead.
+// Option represents a value that may be absent, encoding as CBOR null when
+// Some is false. As a struct field without the "optional" tag, its key is
+// always present with a value or null. With the tag, an absent value omits the
+// key instead, as a nil slice or pointer does.
 type Option[T any] struct {
+	// Value is the wrapped value, meaningful only when Some is set.
 	Value T
-	Some  bool
+
+	// Some reports whether a value is present.
+	Some bool
 }
 
 // MakeSome creates an Option containing a value.
@@ -280,7 +297,9 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 	}
 }
 
-// Unmarshal decodes CBOR data into a value. v must be a pointer.
+// Unmarshal decodes CBOR data into a value. v must be a pointer. Bytes after
+// the item are rejected with ErrTrailingBytes. Raw fields are only
+// structurally traversed; use Verify first to validate their contents.
 func Unmarshal(data []byte, v any) error {
 	dec := NewDecoder(data)
 	if err := dec.Decode(v); err != nil {
@@ -533,7 +552,7 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		}
 		// Walk expected keys in sorted order against actual map entries.
 		// Optional fields with missing keys default to zero value; required
-		// fields must be present. Pointer embed fields are deferred — they
+		// fields must be present. Pointer embed fields are deferred; they
 		// allow missing keys during the walk but validate all-or-none after.
 		remaining := int(length)
 		decoded := make([]bool, len(mFields))

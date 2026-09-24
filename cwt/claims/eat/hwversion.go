@@ -6,8 +6,12 @@
 
 package eat
 
-// HWVersion is the hardware revision identifier (key 260).
+// HWVersion is the hardware revision identifier (key 260). It encodes as a
+// 1-element array per RFC 9711 Section 4.2.5: [version: tstr]. The optional
+// scheme is not supported.
 type HWVersion struct {
+	// HWVersion holds the version in its array encoding. Use NewHWVersion and
+	// Version to set and read it.
 	HWVersion hwVersionValue `cbor:"260,key"`
 }
 
