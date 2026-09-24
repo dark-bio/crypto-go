@@ -231,7 +231,7 @@ type sigAAD struct {
 // custom timestamps, use SignDetachedAt.
 //
 //   - msgToAuth: The message to sign (not embedded in COSE_Sign1)
-//   - signer: The xDSA secret key to sign with
+//   - signer: The xDSA signer, a secret key or a remote or hardware one
 //   - domain: Application domain for separating protocol purposes
 //
 // Returns the serialized COSE_Sign1 structure.
@@ -243,7 +243,7 @@ func SignDetached(msgToAuth any, signer xdsa.Signer, domain []byte) ([]byte, err
 // payload and with an explicit timestamp.
 //
 //   - msgToAuth: The message to sign (not embedded in COSE_Sign1)
-//   - signer: The xDSA secret key to sign with
+//   - signer: The xDSA signer, a secret key or a remote or hardware one
 //   - domain: Application domain for separating protocol purposes
 //   - timestamp: Unix timestamp in seconds to embed in the protected header
 //
@@ -253,7 +253,7 @@ func SignDetachedAt(msgToAuth any, signer xdsa.Signer, domain []byte, timestamp 
 	if err != nil {
 		return nil, err
 	}
-	return signDetachedAt(auth, signer, domain, timestamp), nil
+	return signDetachedAt(auth, signer, domain, timestamp)
 }
 
 // Sign creates a COSE_Sign1 digital signature of the msgToEmbed.
@@ -263,7 +263,7 @@ func SignDetachedAt(msgToAuth any, signer xdsa.Signer, domain []byte, timestamp 
 //
 //   - msgToEmbed: The message to sign (embedded in COSE_Sign1)
 //   - msgToAuth: Additional authenticated data (not embedded, but signed)
-//   - signer: The xDSA secret key to sign with
+//   - signer: The xDSA signer, a secret key or a remote or hardware one
 //   - domain: Application domain for separating protocol purposes
 //
 // Returns the serialized COSE_Sign1 structure.
@@ -275,7 +275,7 @@ func Sign(msgToEmbed, msgToAuth any, signer xdsa.Signer, domain []byte) ([]byte,
 //
 //   - msgToEmbed: The message to sign (embedded in COSE_Sign1)
 //   - msgToAuth: Additional authenticated data (not embedded, but signed)
-//   - signer: The xDSA secret key to sign with
+//   - signer: The xDSA signer, a secret key or a remote or hardware one
 //   - domain: Application domain for separating protocol purposes
 //   - timestamp: Unix timestamp in seconds to embed in the protected header
 //
@@ -289,11 +289,11 @@ func SignAt(msgToEmbed, msgToAuth any, signer xdsa.Signer, domain []byte, timest
 	if err != nil {
 		return nil, err
 	}
-	return signAt(embed, auth, signer, domain, timestamp), nil
+	return signAt(embed, auth, signer, domain, timestamp)
 }
 
 // signAt creates a COSE_Sign1 digital signature with an explicit timestamp (internal).
-func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, timestamp int64) []byte {
+func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, timestamp int64) ([]byte, error) {
 	// Restrict the user's domain to the context of this library
 	info := []byte(DomainPrefix + string(domain))
 	aad, err := cbor.Marshal(&sigAAD{
@@ -324,8 +324,10 @@ func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, tim
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	signature, _ := signer.Sign(toBeSigned)
-
+	signature, err := signer.Sign(toBeSigned)
+	if err != nil {
+		return nil, err
+	}
 	// Build and encode COSE_Sign1
 	sign1 := coseSign1{
 		Protected:   protected,
@@ -337,11 +339,11 @@ func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, tim
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	return result
+	return result, nil
 }
 
 // signDetachedAt creates a COSE_Sign1 digital signature with null payload (internal).
-func signDetachedAt(msgToAuth []byte, signer xdsa.Signer, domain []byte, timestamp int64) []byte {
+func signDetachedAt(msgToAuth []byte, signer xdsa.Signer, domain []byte, timestamp int64) ([]byte, error) {
 	// Restrict the user's domain to the context of this library
 	info := []byte(DomainPrefix + string(domain))
 	aad, err := cbor.Marshal(&sigAAD{
@@ -372,8 +374,10 @@ func signDetachedAt(msgToAuth []byte, signer xdsa.Signer, domain []byte, timesta
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	signature, _ := signer.Sign(toBeSigned)
-
+	signature, err := signer.Sign(toBeSigned)
+	if err != nil {
+		return nil, err
+	}
 	// Build and encode COSE_Sign1 with null payload
 	sign1 := coseSign1{
 		Protected:   protected,
@@ -385,7 +389,7 @@ func signDetachedAt(msgToAuth []byte, signer xdsa.Signer, domain []byte, timesta
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	return result
+	return result, nil
 }
 
 // VerifyDetached validates a COSE_Sign1 digital signature with a detached payload.
@@ -631,7 +635,7 @@ func Peek[T any](signature []byte) (T, error) {
 //
 //   - msgToSeal: The message to sign and encrypt
 //   - msgToAuth: Additional authenticated data (signed and bound to encryption, but not embedded)
-//   - signer: The xDSA secret key to sign with
+//   - signer: The xDSA signer, a secret key or a remote or hardware one
 //   - recipient: The xHPKE public key to encrypt to
 //   - domain: Application domain for HPKE key derivation
 //
@@ -644,7 +648,7 @@ func Seal(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.PublicK
 //
 //   - msgToSeal: The message to sign and encrypt
 //   - msgToAuth: Additional authenticated data (signed and bound to encryption, but not embedded)
-//   - signer: The xDSA secret key to sign with
+//   - signer: The xDSA signer, a secret key or a remote or hardware one
 //   - recipient: The xHPKE public key to encrypt to
 //   - domain: Application domain for HPKE key derivation
 //   - timestamp: Unix timestamp in seconds to embed in the signature's protected header
@@ -661,7 +665,10 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 		return nil, err
 	}
 	// Create a COSE_Sign1 with the payload, binding the AAD
-	signed := signAt(seal, auth, signer, domain, timestamp)
+	signed, err := signAt(seal, auth, signer, domain, timestamp)
+	if err != nil {
+		return nil, err
+	}
 
 	// Encrypt the signed message to the recipient
 	return Encrypt(signed, cbor.Raw(auth), recipient, domain)
