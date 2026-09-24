@@ -53,3 +53,17 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+  semver:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: stable
+
+      - name: Check the public API against the latest release
+        run: go run golang.org/x/exp/cmd/gorelease@latest
