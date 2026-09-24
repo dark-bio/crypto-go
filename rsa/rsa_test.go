@@ -7,9 +7,12 @@
 package rsa
 
 import (
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -60,6 +63,67 @@ func TestSecretKeyBytesCodec(t *testing.T) {
 	m := key.Marshal()
 	if got := hex.EncodeToString(m[:]); got != input {
 		t.Errorf("encoded key mismatch: have %s, want %s", got, input)
+	}
+}
+
+// Tests that a raw byte encoded RSA private key is rejected if its primes
+// repeat, as it would fail to encode as DER, or if its private exponent is not
+// below the modulus.
+func TestSecretKeyBytesMalformed(t *testing.T) {
+	// A key with p = q = 2^1024 - 1 and d = 65537^-1 mod (p - 1)
+	repeatedPrime := strings.Repeat("ff", 128)
+	repeatedPrivExp := "" +
+		"000000000000000000000000000000000000000000000000000000000000" +
+		"000000000000000000000000000000000000000000000000000000000000" +
+		"000000000000000000000000000000000000000000000000000000000000" +
+		"000000000000000000000000000000000000000000000000000000000000" +
+		"00000000000000000000ffff0000ffff0000ffff0000ffff0000ffff0000" +
+		"ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff" +
+		"0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000" +
+		"ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff0000ffff" +
+		"0000ffff0000ffff0000ffff0000ffff"
+
+	// A valid key with (p - 1)(q - 1) added to its private exponent
+	oversizedPrime1 := "" +
+		"ff2ebde4fed03e0dfdc20c47dded8ddb9f925b6aeb37bc7a50033361a8fa" +
+		"824626db9a72a56a1321c3071f5ca04bc37475296278ef27f719585e25da" +
+		"0d7ed5d55038ba324f2d7111e12369c6021f92fa9d2146c7bed71d5ef1c5" +
+		"6d8b6786538ba61ad8ee1daee3fc8f66d04a72a73ba83c609ab19fa8ff8d" +
+		"64096f1feff8857f"
+	oversizedPrime2 := "" +
+		"df0a39d23e32ef26b12c6acb405940d610dccbe903d69afafcdcd7888ec1" +
+		"e809d8e9f50d8b3c7f636a800f527e3315afb5cfe1ec8457247f9f5e79f0" +
+		"80c99615342a1c2e8a91a63f3a2d6d2ec4e1d8922e9415f60c2f22ed84cb" +
+		"76e95774e26d743965d2ad74b8076569aa04ffde54e51148bf7306220754" +
+		"70b4dcb83e8d0a17"
+	oversizedPrivExp := "" +
+		"e802c4c436ece5aea5342ca2c33ce0132ef77802ecfff9fa15a6e4d72066" +
+		"b124e18e3524dac3d8d13dc9ae5dda7290b9d6f0ca5dde996b7b8c58ac02" +
+		"267d74264d309859914aefaf869e6ed0171e5870fa7897b5000ee2d812b9" +
+		"2b1b66ca5f73351209511e1e6add56040bf19d05b5ee88aa0b0ff6fd3afb" +
+		"c181486be3d07b95776ce9eaeedb93ed23a0c5f261ca57d6314c9b4b38d3" +
+		"23bb41db152862b84826ae6f63613e464230ae17b24848eac9a411a962e8" +
+		"0f509ecad2b7f0beed2b37edbe5f0b67a76e0954de18a9acc852cea5d03d" +
+		"b1501e0415867834d750dbcc31e4b4a8aae8e68dbe90655c1f44ef0023fa" +
+		"ad60373d51a9cf92aa7ca7640ebf99e9"
+
+	pubExp := "0000000000010001"
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"repeated prime", repeatedPrime + repeatedPrime + repeatedPrivExp + pubExp},
+		{"oversized private exponent", oversizedPrime1 + oversizedPrime2 + oversizedPrivExp + pubExp},
+	}
+	for _, tt := range tests {
+		inputBytes, _ := hex.DecodeString(tt.input)
+
+		var b [SecretKeySize]byte
+		copy(b[:], inputBytes)
+
+		if _, err := ParseSecretKey(b); !errors.Is(err, ErrMalformedKey) {
+			t.Errorf("%s: have %v, want %v", tt.name, err, ErrMalformedKey)
+		}
 	}
 }
 
@@ -226,6 +290,54 @@ func TestSecretKeyDERCodec(t *testing.T) {
 	}
 	if got := hex.EncodeToString(key.MarshalDER()); got != input {
 		t.Errorf("encoded key mismatch: have %s, want %s", got, input)
+	}
+}
+
+// Tests that a DER encoded RSA private key is rejected unless both its primes
+// are 1024 bits, as the raw encoding could not hold it otherwise.
+func TestSecretKeyDERMalformed(t *testing.T) {
+	// A 1025-bit and a 1023-bit prime spanning a 2048-bit modulus
+	largePrime := "" +
+		"01cd1fa0a41d00ebcc15f70f4b179f7e01a9dccb1b7163cd7f03c0177e3b" +
+		"20544aa83780cfd09e09891bd7d12371f036b6180f13a6848e6798dcb6b5" +
+		"b21f097930d6a838ebacdd55d8f68b1d15003aaf6a8f00f41f79ef6fdbc7" +
+		"81afd21ec76b71946698335ea1fa01b581a7df57e33b6d908bc31bb485b6" +
+		"be7bd5e2d05d4e350d"
+	smallPrime := "" +
+		"6298392646b5a24ffd64c2db91953dc51f21fa7a7882c183a145fa80d579" +
+		"0972ddd90295048b693b09b76069ec2b3e00d9c92b6b91a716142eb66a56" +
+		"b6d2388296d1f73a51e04d445b545b05cbb6d3eebdcfb47a865211d37e45" +
+		"abdef989e4dee4057fbce75e611142bb5fcf2e82b7dbb46f84a570c280bf" +
+		"e6dab8b74032f857"
+
+	large, _ := new(big.Int).SetString(largePrime, 16)
+	small, _ := new(big.Int).SetString(smallPrime, 16)
+
+	tests := []struct {
+		name string
+		p, q *big.Int
+	}{
+		{"1025-bit first prime", large, small},
+		{"1025-bit second prime", small, large},
+	}
+	for _, tt := range tests {
+		one := big.NewInt(1)
+		totient := new(big.Int).Mul(new(big.Int).Sub(tt.p, one), new(big.Int).Sub(tt.q, one))
+
+		key := &rsa.PrivateKey{
+			PublicKey: rsa.PublicKey{N: new(big.Int).Mul(tt.p, tt.q), E: 65537},
+			D:         new(big.Int).ModInverse(big.NewInt(65537), totient),
+			Primes:    []*big.Int{tt.p, tt.q},
+		}
+		key.Precompute()
+
+		der, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			t.Fatalf("%s: failed to encode key: %v", tt.name, err)
+		}
+		if _, err := ParseSecretKeyDER(der); !errors.Is(err, ErrMalformedKey) {
+			t.Errorf("%s: have %v, want %v", tt.name, err, ErrMalformedKey)
+		}
 	}
 }
 
