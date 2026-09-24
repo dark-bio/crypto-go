@@ -88,3 +88,7 @@ The Rust sibling also has a TypeScript binding [`github.com/dark-bio/crypto-ts`]
 Shoutout to Filippo Valsorda ([@filosottile](https://github.com/filosottile)) for lots of tips and nudges on what kind of cryptographic primitives to use and how to combine them properly; and also for his work in general on cryptography standards.
 
 Naturally, many thanks to the authors of all the libraries this project depends on.
+
+## License
+
+This library is licensed under the [BSD 3-Clause License](https://github.com/dark-bio/crypto-go/blob/main/LICENSE).
