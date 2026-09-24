@@ -49,7 +49,8 @@ var (
 	ErrTrailingData = errors.New("pem: trailing data after PEM block")
 
 	// ErrMalformedBody is returned when the body between header and footer is
-	// empty or does not end in a line ending. The wrapping error says which.
+	// empty, holds only line endings, or does not end in a line ending. The
+	// wrapping error says which.
 	ErrMalformedBody = errors.New("pem: malformed PEM body")
 
 	// ErrMalformedPayload is returned when the body is not strict base64, or a
@@ -66,6 +67,7 @@ var (
 //   - Line endings must be consistent (\n or \r\n throughout)
 //   - Base64 lines contain only base64 characters
 //   - Strict base64 decoding (no padding errors, etc.)
+//   - Payload must not be empty
 //   - No trailing data after the PEM block
 func Decode(data []byte) (kind string, blob []byte, err error) {
 	// Must start with header immediately (no leading whitespace)
@@ -135,6 +137,10 @@ func Decode(data []byte) (kind string, blob []byte, err error) {
 	if bytes.ContainsAny(b64, "\r\n") {
 		return "", nil, fmt.Errorf("%w: stray line endings", ErrMalformedPayload)
 	}
+	// A body of blank lines holds no payload, rejected like a missing body
+	if len(b64) == 0 {
+		return "", nil, fmt.Errorf("%w: empty body", ErrMalformedBody)
+	}
 	decoded, err := base64.StdEncoding.Strict().DecodeString(string(b64))
 	if err != nil {
 		return "", nil, fmt.Errorf("%w: %v", ErrMalformedPayload, err)
@@ -143,8 +149,12 @@ func Decode(data []byte) (kind string, blob []byte, err error) {
 }
 
 // Encode encodes data as a PEM block with the given type.
-// Lines are 64 characters, using \n line endings.
+// Lines are 64 characters, using \n line endings. It panics if blob is empty,
+// since Decode rejects an empty payload.
 func Encode(kind string, blob []byte) []byte {
+	if len(blob) == 0 {
+		panic("pem: empty payload")
+	}
 	b64 := base64.StdEncoding.EncodeToString(blob)
 
 	var buf bytes.Buffer
