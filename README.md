@@ -2,6 +2,7 @@
 
 [![](https://pkg.go.dev/badge/github.com/dark-bio/crypto-go.svg)](https://pkg.go.dev/github.com/dark-bio/crypto-go)
 [![](https://github.com/dark-bio/crypto-go/workflows/tests/badge.svg)](https://github.com/dark-bio/crypto-go/actions/workflows/ci.yml)
+[![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](https://github.com/dark-bio/crypto-go/blob/main/LICENSE)
 
 This repository is parameter selection and lightweight wrapper around a number of Go cryptographic libraries. Its purpose isn't to implement primitives, rather to unify the API surface of existing libraries; limited to the tiny subset needed by the Dark Bio project.
 
@@ -18,19 +19,53 @@ The library is opinionated. Parameters and primitives were selected to provide m
   - **xHPKE ([RFC-9180](https://datatracker.ietf.org/doc/html/rfc9180))**: `X-WING`, `HKDF`, `SHA256`, `ChaCha20`, `Poly1305`, `dark-bio-v1:` domain prefix
     - **X-WING ([RFC-DRAFT](https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem))**: `MLKEM`, `ECC`
       - **ECC ([RFC-7748](https://datatracker.ietf.org/doc/html/rfc7748))**: `X25519`
-      - **MLKEM([RFC-DRAFT](https://datatracker.ietf.org/doc/html/draft-ietf-ipsecme-ikev2-mlkem))**: Security level 3 (`ML-KEM-768`)
+      - **MLKEM ([FIPS-203](https://csrc.nist.gov/pubs/fips/203/final))**: Security level 3 (`ML-KEM-768`)
   - **STREAM (*RFC N/A*, [Age](https://github.com/FiloSottile/age))**: `ChaCha20`, `Poly1305`, `16B` tag, `64KB` chunk
 - Key derivation
   - **Argon2 ([RFC-9106](https://datatracker.ietf.org/doc/html/rfc9106))**: `id` variant
   - **HKDF ([RFC-5869](https://datatracker.ietf.org/doc/html/rfc5869))**: `SHA256`
 - Serialization
   - **CBOR ([RFC-8949](https://datatracker.ietf.org/doc/html/rfc8949))**: restricted to `bool`,`null`, `integer`, `text`, `bytes`, `array`, `map[int]`, `option`
-  - **COSE ([RFC-8152](https://datatracker.ietf.org/doc/html/rfc8152))**: `COSE_Sign1`, `COSE_Encrypt0`, `dark-bio-v1:` domain prefix
+  - **COSE ([RFC-9052](https://datatracker.ietf.org/doc/html/rfc9052))**: `COSE_Sign1`, `COSE_Encrypt0`, `dark-bio-v1:` domain prefix
 - Credential / Attestation
   - **CWT ([RFC-8392](https://datatracker.ietf.org/doc/html/rfc8392))**: `xDSA`, `xHPKE`
     - **EAT ([RFC-9711](https://datatracker.ietf.org/doc/html/rfc9711))**
 
-As a starting point, you will most probably want `xdsa` for digital signatures, `xhpke` for asymmetric encryption and `cose` for proper enveloping.
+## Quick start
+
+Signatures come from `xdsa`, encryption from `xhpke`, and `cose` wraps both into COSE envelopes using the Dark Bio wire profile documented in the `cose` package.
+
+```sh
+go get github.com/dark-bio/crypto-go
+```
+
+COSE signing and verification and xHPKE encryption and decryption use an application domain that both sides must agree on. It is prefixed with `dark-bio-v1:` internally and binds the operation to one purpose. Choose distinct domains for distinct purposes. Raw `xdsa` signatures carry no such application domain, which is why the `cose` envelopes are the recommended entry point.
+
+```go
+func example() (string, error) {
+	// Long term identities, one for signing and one for receiving
+	signer := xdsa.GenerateKey()
+	recipient := xhpke.GenerateKey()
+	domain, drift := []byte("example"), uint64(60)
+
+	// A detached signature over a message that travels separately
+	signature, err := cose.SignDetached("payload", signer, domain)
+	if err != nil {
+		return "", err
+	}
+	if err := cose.VerifyDetached(signature, "payload", signer.PublicKey(), domain, &drift); err != nil {
+		return "", err
+	}
+
+	// Sign and encrypt a payload to the recipient, then open and verify it back.
+	// The second argument is authenticated but must be supplied separately.
+	sealed, err := cose.Seal("payload", "metadata", signer, recipient.PublicKey(), domain)
+	if err != nil {
+		return "", err
+	}
+	return cose.Open[string](sealed, "metadata", recipient, signer.PublicKey(), domain, &drift)
+}
+```
 
 ## CBOR struct tags
 
