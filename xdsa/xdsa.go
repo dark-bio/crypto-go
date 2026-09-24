@@ -27,6 +27,7 @@ import (
 	"github.com/dark-bio/crypto-go/eddsa"
 	"github.com/dark-bio/crypto-go/internal/asn1ext"
 	"github.com/dark-bio/crypto-go/internal/base64ext"
+	"github.com/dark-bio/crypto-go/internal/jsonext"
 	"github.com/dark-bio/crypto-go/mldsa"
 	"github.com/dark-bio/crypto-go/pem"
 )
@@ -291,6 +292,11 @@ func SplitSign(mlKey mldsa.Signer, edKey eddsa.Signer, message []byte) (*Signatu
 
 // PublicKey is an ML-DSA-65 public key paired with an Ed25519 public key for
 // verifying quantum resistant digital signatures.
+//
+// The zero value is not a valid key, and using it panics. JSON decoding rejects
+// null, but a field missing from the input keeps the zero value without an
+// error. To detect a missing key, decode into a *PublicKey field and check it
+// for nil.
 type PublicKey struct {
 	mlKey *mldsa.PublicKey
 	edKey *eddsa.PublicKey
@@ -432,7 +438,7 @@ func (k *PublicKey) MarshalPEM() string {
 }
 
 // MarshalText implements encoding.TextMarshaler.
-func (k *PublicKey) MarshalText() ([]byte, error) {
+func (k PublicKey) MarshalText() ([]byte, error) {
 	raw := k.Marshal()
 	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
 }
@@ -454,6 +460,11 @@ func (k *PublicKey) UnmarshalText(text []byte) error {
 	}
 	*k = *key
 	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler, rejecting null.
+func (k *PublicKey) UnmarshalJSON(data []byte) error {
+	return jsonext.UnmarshalText(data, k)
 }
 
 // Fingerprint returns a 256-bit unique identifier for this key.
@@ -524,7 +535,7 @@ func (s *Signature) Split() (*mldsa.Signature, *eddsa.Signature) {
 }
 
 // MarshalText implements encoding.TextMarshaler.
-func (s *Signature) MarshalText() ([]byte, error) {
+func (s Signature) MarshalText() ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString(s[:])), nil
 }
 
@@ -541,11 +552,16 @@ func (s *Signature) UnmarshalText(text []byte) error {
 	return nil
 }
 
+// UnmarshalJSON implements json.Unmarshaler, rejecting null.
+func (s *Signature) UnmarshalJSON(data []byte) error {
+	return jsonext.UnmarshalText(data, s)
+}
+
 // Fingerprint is a 256-bit unique identifier for a composite xDSA key.
 type Fingerprint [FingerprintSize]byte
 
 // MarshalText implements encoding.TextMarshaler.
-func (f *Fingerprint) MarshalText() ([]byte, error) {
+func (f Fingerprint) MarshalText() ([]byte, error) {
 	return []byte(base64.StdEncoding.EncodeToString(f[:])), nil
 }
 
@@ -560,6 +576,11 @@ func (f *Fingerprint) UnmarshalText(text []byte) error {
 	}
 	copy(f[:], raw)
 	return nil
+}
+
+// UnmarshalJSON implements json.Unmarshaler, rejecting null.
+func (f *Fingerprint) UnmarshalJSON(data []byte) error {
+	return jsonext.UnmarshalText(data, f)
 }
 
 // Signer is an interface that allows creating xDSA signatures without a specific
