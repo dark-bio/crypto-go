@@ -427,6 +427,16 @@ func VerifyDetachedAt(msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey
 	return verifyDetached(msgToCheck, auth, verifier, domain, maxDrift, now)
 }
 
+// absDiff returns the distance between two Unix timestamps in seconds. It works
+// in unsigned arithmetic, since the distance between timestamps at opposite ends
+// of the int64 range does not fit in an int64.
+func absDiff(a, b int64) uint64 {
+	if a > b {
+		return uint64(a) - uint64(b)
+	}
+	return uint64(b) - uint64(a)
+}
+
 // verifyDetached validates a COSE_Sign1 digital signature with null payload (internal).
 func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) error {
 	// Restrict the user's domain to the context of this library
@@ -454,11 +464,7 @@ func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, doma
 	}
 	// Check signature timestamp drift if maxDrift is specified
 	if maxDrift != nil {
-		drift := now - header.Timestamp
-		if drift < 0 {
-			drift = -drift
-		}
-		if uint64(drift) > *maxDrift {
+		if drift := absDiff(now, header.Timestamp); drift > *maxDrift {
 			return fmt.Errorf("%w: time drift %ds exceeds max %ds", ErrStaleSignature, drift, *maxDrift)
 		}
 	}
@@ -554,11 +560,7 @@ func verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byt
 	}
 	// Check signature timestamp drift if maxDrift is specified
 	if maxDrift != nil {
-		drift := now - header.Timestamp
-		if drift < 0 {
-			drift = -drift
-		}
-		if uint64(drift) > *maxDrift {
+		if drift := absDiff(now, header.Timestamp); drift > *maxDrift {
 			return nil, fmt.Errorf("%w: time drift %ds exceeds max %ds", ErrStaleSignature, drift, *maxDrift)
 		}
 	}
