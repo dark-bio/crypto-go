@@ -87,15 +87,11 @@ func TestCCTVVectors(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to decode file key: %v", err)
 			}
-			key := hkdf.Key(fileKey, paysec[:16], []byte("payload"), 32)
+			key := stream.PayloadKey(hkdf.Key(fileKey, paysec[:16], []byte("payload"), stream.PayloadKeySize))
 			ciphertext := paysec[16:]
 
-			reader, err := stream.NewDecryptReader(key, bytes.NewReader(ciphertext))
-			if err != nil {
-				t.Fatalf("failed to create decrypt reader: %v", err)
-			}
 			var released bytes.Buffer
-			_, rerr := io.Copy(&released, reader)
+			_, rerr := io.Copy(&released, stream.Decrypt(key, bytes.NewReader(ciphertext)))
 
 			// Whatever was handed out must match the expected payload hash
 			if hash, ok := hdr["payload"]; ok {
@@ -111,10 +107,7 @@ func TestCCTVVectors(t *testing.T) {
 					t.Fatalf("failed to decrypt: %v", rerr)
 				}
 				var reencrypted bytes.Buffer
-				writer, err := stream.NewEncryptWriter(key, &reencrypted)
-				if err != nil {
-					t.Fatalf("failed to create encrypt writer: %v", err)
-				}
+				writer := stream.Encrypt(key, &reencrypted)
 				if _, err := writer.Write(released.Bytes()); err != nil {
 					t.Fatalf("failed to re-encrypt: %v", err)
 				}
@@ -124,8 +117,28 @@ func TestCCTVVectors(t *testing.T) {
 				if !bytes.Equal(reencrypted.Bytes(), ciphertext) {
 					t.Fatal("re-encrypted payload mismatch")
 				}
-			} else if rerr == nil {
-				t.Fatal("decryption succeeded, want failure")
+				// Random access must recover the same plaintext
+				reader, err := stream.DecryptAt(key, bytes.NewReader(ciphertext), int64(len(ciphertext)))
+				if err != nil {
+					t.Fatalf("failed to open for random access: %v", err)
+				}
+				plaintext, err := io.ReadAll(io.NewSectionReader(reader, 0, reader.Size()))
+				if err != nil {
+					t.Fatalf("failed to read with random access: %v", err)
+				}
+				if !bytes.Equal(plaintext, released.Bytes()) {
+					t.Fatal("random access plaintext mismatch")
+				}
+			} else {
+				if rerr == nil {
+					t.Fatal("decryption succeeded, want failure")
+				}
+				// Random access must refuse the stream on opening or on reading
+				if reader, err := stream.DecryptAt(key, bytes.NewReader(ciphertext), int64(len(ciphertext))); err == nil {
+					if _, err := io.ReadAll(io.NewSectionReader(reader, 0, reader.Size())); err == nil {
+						t.Fatal("random access succeeded, want failure")
+					}
+				}
 			}
 		})
 	}
