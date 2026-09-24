@@ -441,6 +441,23 @@ func TestSignVerify(t *testing.T) {
 	}
 }
 
+// Tests that signing accepts a 255 byte context and panics on a longer one,
+// instead of returning an invalid signature.
+func TestSignContextLimit(t *testing.T) {
+	secret := GenerateKey()
+
+	signature, _ := secret.Sign([]byte("message"), make([]byte, 255))
+	if err := secret.PublicKey().Verify([]byte("message"), make([]byte, 255), signature); err != nil {
+		t.Fatalf("failed to verify with a 255 byte context: %v", err)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected signing with a 256 byte context to panic")
+		}
+	}()
+	secret.Sign([]byte("message"), make([]byte, 256))
+}
+
 // Tests that a public key whose algorithm identifier carries parameters is
 // rejected.
 func TestPublicKeyDERRejectsParams(t *testing.T) {
