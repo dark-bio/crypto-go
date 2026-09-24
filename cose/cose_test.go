@@ -7,6 +7,7 @@
 package cose
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -377,6 +378,47 @@ func TestSignVerifyDetached(t *testing.T) {
 	// Verify with wrong message fails
 	if err := VerifyDetached(signed, &testAAD{Str: "wrong"}, alice.PublicKey(), []byte("domain"), nil); err == nil {
 		t.Fatal("VerifyDetached should have failed with wrong message")
+	}
+}
+
+// failingSigner stands in for an unavailable remote or hardware signer, so
+// every signing attempt fails.
+type failingSigner struct {
+	key *xdsa.SecretKey
+}
+
+// errSignerUnavailable is the error every failingSigner signature returns.
+var errSignerUnavailable = errors.New("signer unavailable")
+
+// Sign implements xdsa.Signer and always fails.
+func (s failingSigner) Sign([]byte) (*xdsa.Signature, error) {
+	return nil, errSignerUnavailable
+}
+
+// PublicKey implements xdsa.Signer.
+func (s failingSigner) PublicKey() *xdsa.PublicKey {
+	return s.key.PublicKey()
+}
+
+// Tests that a signer's error is returned by every signing entry point instead
+// of crashing on the missing signature.
+func TestSignerErrorPropagates(t *testing.T) {
+	signer := failingSigner{key: xdsa.GenerateKey()}
+	recipient := xhpke.GenerateKey().PublicKey()
+	msg := testAAD{Str: "hello"}
+
+	tests := []struct {
+		name string
+		call func() ([]byte, error)
+	}{
+		{"Sign", func() ([]byte, error) { return Sign(&msg, &msg, signer, []byte("domain")) }},
+		{"SignDetached", func() ([]byte, error) { return SignDetached(&msg, signer, []byte("domain")) }},
+		{"Seal", func() ([]byte, error) { return Seal(&msg, &msg, signer, recipient, []byte("domain")) }},
+	}
+	for _, tt := range tests {
+		if _, err := tt.call(); !errors.Is(err, errSignerUnavailable) {
+			t.Errorf("%s: %v", tt.name, err)
+		}
 	}
 }
 

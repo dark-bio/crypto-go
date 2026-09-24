@@ -2659,6 +2659,25 @@ func TestFixedArrayRoundtrip(t *testing.T) {
 	})
 }
 
+// Tests that a byte string length cannot wrap to the expected fixed size on
+// 32-bit targets, including when the bytes are nested in an array.
+func TestFixedBytesWideLength(t *testing.T) {
+	// A byte string header claiming 2^32 + 32 bytes, followed by only 32 of them
+	wide := append([]byte{0x5b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x20}, bytes.Repeat([]byte{0xa5}, 32)...)
+
+	var fixed [32]byte
+	if err := Unmarshal(wide, &fixed); !errors.Is(err, ErrUnexpectedItemCount) {
+		t.Errorf("fixed bytes: got %v, want %v", err, ErrUnexpectedItemCount)
+	}
+	var nested struct {
+		_     struct{} `cbor:"_,array"`
+		Bytes [32]byte
+	}
+	if err := Unmarshal(append([]byte{0x81}, wide...), &nested); !errors.Is(err, ErrUnexpectedItemCount) {
+		t.Errorf("nested bytes: got %v, want %v", err, ErrUnexpectedItemCount)
+	}
+}
+
 // Tests that the CBOR encoding of []T matches the expected wire format.
 func TestSliceEncoding(t *testing.T) {
 	// [1, 2, 3] should be: 83 (array of 3) 01 02 03

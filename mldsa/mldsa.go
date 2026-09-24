@@ -10,7 +10,7 @@
 //
 // ML-DSA-65 on its own, the post-quantum half of the composite scheme in the
 // xdsa package. Signing takes a context string that verification must repeat.
-// Contexts may contain 0 to 255 bytes.
+// Contexts may contain 0 to 255 bytes; signing panics for longer ones.
 package mldsa
 
 import (
@@ -247,10 +247,15 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 
 // Sign creates a digital signature of the message with an optional context
 // string. Pass an empty slice for no context. Verification must use the same
-// bytes, and the context must not exceed 255 bytes.
+// bytes. This call will never return an error, the type is there for
+// composability.
+//
+// Panics if ctx is longer than 255 bytes.
 func (k *SecretKey) Sign(message []byte, ctx []byte) (*Signature, error) {
 	var sig Signature
-	mldsa65.SignTo(k.key, message, ctx, false, sig[:])
+	if err := mldsa65.SignTo(k.key, message, ctx, false, sig[:]); err != nil {
+		panic("mldsa: " + err.Error())
+	}
 	return &sig, nil
 }
 

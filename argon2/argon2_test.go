@@ -43,3 +43,36 @@ func TestKey(t *testing.T) {
 		}
 	}
 }
+
+// Tests that the smallest inputs within the limits derive a key and that each
+// input just outside them panics.
+func TestKeyLimits(t *testing.T) {
+	password, salt := []byte("password"), []byte("somesalt")
+	if key := Key(password, salt, 1, 8, 1, 4); len(key) != 4 {
+		t.Fatalf("Key() = %d bytes, want 4", len(key))
+	}
+	tests := []struct {
+		name    string
+		salt    []byte
+		time    uint32
+		memory  uint32
+		threads uint8
+		keyLen  uint32
+	}{
+		{name: "zero time", salt: salt, time: 0, memory: 8, threads: 1, keyLen: 4},
+		{name: "zero threads", salt: salt, time: 1, memory: 8, threads: 0, keyLen: 4},
+		{name: "memory below 8 KiB per thread", salt: salt, time: 1, memory: 15, threads: 2, keyLen: 4},
+		{name: "salt below 8 bytes", salt: salt[:7], time: 1, memory: 8, threads: 1, keyLen: 4},
+		{name: "key below 4 bytes", salt: salt, time: 1, memory: 8, threads: 1, keyLen: 3},
+	}
+	for _, tt := range tests {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Error(tt.name)
+				}
+			}()
+			Key(password, tt.salt, tt.time, tt.memory, tt.threads, tt.keyLen)
+		}()
+	}
+}
