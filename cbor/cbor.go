@@ -378,7 +378,7 @@ func (d *Decoder) DecodeBytesFixed(n int) ([]byte, error) {
 		return nil, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, major, MajorBytes)
 	}
 	// Check that the length matches the expected array size
-	if int(length) != n {
+	if length != uint64(n) {
 		return nil, fmt.Errorf("%w: %d, want %d", ErrUnexpectedItemCount, length, n)
 	}
 	// Retrieve the bytes and copy into the fixed-size array
