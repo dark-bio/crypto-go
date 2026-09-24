@@ -60,8 +60,8 @@ var (
 
 	// ErrMalformedKey is returned by every key parser when the key cannot be
 	// parsed or its contents are unusable. Causes include a modulus that is not
-	// 2048 bits, an exponent other than 65537 or a non-canonical encoding. The
-	// wrapping error names the problem.
+	// 2048 bits, an exponent other than 65537, primes that are not both 1024
+	// bits or a non-canonical encoding. The wrapping error names the problem.
 	ErrMalformedKey = errors.New("rsa: malformed key")
 
 	// ErrInvalidSignature is returned by PublicKey.Verify and PublicKey.VerifyHash
@@ -157,6 +157,13 @@ func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	// well do the same.
 	if rsaKey.E != 65537 {
 		return nil, fmt.Errorf("%w: exponent must be 65537", ErrMalformedKey)
+	}
+	// Both primes must be exactly 1024 bits, as the raw encoding has no room
+	// for any other split of the modulus
+	for _, prime := range rsaKey.Primes {
+		if prime.BitLen() != 1024 {
+			return nil, fmt.Errorf("%w: primes must be 1024 bits", ErrMalformedKey)
+		}
 	}
 	// Go's ASN1 parser permits unused trailing bytes, which may end up with a
 	// weird interplay with the optional RSA CRT parameters (junk ignored). We
