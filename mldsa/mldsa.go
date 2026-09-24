@@ -7,6 +7,10 @@
 // Package mldsa provides ML-DSA-65 digital signatures.
 //
 // https://datatracker.ietf.org/doc/html/rfc9881
+//
+// ML-DSA-65 on its own, the post-quantum half of the composite scheme in the
+// xdsa package. Signing takes a context string that verification must repeat.
+// Contexts may contain 0 to 255 bytes.
 package mldsa
 
 import (
@@ -45,11 +49,30 @@ const (
 var OID = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 3, 18}
 
 var (
-	ErrUnexpectedPemTag    = errors.New("mldsa: invalid PEM tag")
+	// ErrUnexpectedPemTag is returned by ParseSecretKeyPEM and ParsePublicKeyPEM
+	// when the PEM block type is not "PRIVATE KEY" or "PUBLIC KEY" respectively.
+	// The wrapping error carries the type found.
+	ErrUnexpectedPemTag = errors.New("mldsa: invalid PEM tag")
+
+	// ErrUnexpectedAlgorithm is returned by the DER parsers, and through them by
+	// the PEM parsers, when the key names an algorithm other than ML-DSA-65.
 	ErrUnexpectedAlgorithm = errors.New("mldsa: not an ML-DSA-65 key")
-	ErrMalformedKey        = errors.New("mldsa: malformed key")
-	ErrTrailingData        = errors.New("mldsa: trailing data in key encoding")
-	ErrInvalidSignature    = errors.New("mldsa: signature verification failed")
+
+	// ErrMalformedKey is returned by the DER and PEM parsers when a key encoding
+	// cannot be parsed or its contents are unusable. Causes include wrong seed
+	// or key sizes, an expanded key that does not match its seed, unexpected
+	// algorithm parameters or an unsupported PKCS#8 version. The byte
+	// constructors cannot fail, and the wrapping error names the problem.
+	ErrMalformedKey = errors.New("mldsa: malformed key")
+
+	// ErrTrailingData is returned by the DER parsers, and through them by the
+	// PEM parsers, when bytes follow the key structure or its last field.
+	ErrTrailingData = errors.New("mldsa: trailing data in key encoding")
+
+	// ErrInvalidSignature is returned by PublicKey.Verify when the signature
+	// does not verify under the key for the message and context, or it is not
+	// a well formed ML-DSA-65 signature at all.
+	ErrInvalidSignature = errors.New("mldsa: signature verification failed")
 )
 
 // SecretKey contains an ML-DSA-65 private key for creating digital signatures.
@@ -222,8 +245,9 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 	return k.PublicKey().Fingerprint()
 }
 
-// Sign creates a digital signature of the message with an optional context string.
-// This call will never return an error, the type is there for composability.
+// Sign creates a digital signature of the message with an optional context
+// string. Pass an empty slice for no context. Verification must use the same
+// bytes, and the context must not exceed 255 bytes.
 func (k *SecretKey) Sign(message []byte, ctx []byte) (*Signature, error) {
 	var sig Signature
 	mldsa65.SignTo(k.key, message, ctx, false, sig[:])
@@ -314,11 +338,13 @@ func (k *PublicKey) Marshal() [PublicKeySize]byte {
 	return out
 }
 
+// MarshalText implements encoding.TextMarshaler.
 func (k *PublicKey) MarshalText() ([]byte, error) {
 	raw := k.Marshal()
 	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
 }
 
+// UnmarshalText implements encoding.TextUnmarshaler.
 func (k *PublicKey) UnmarshalText(text []byte) error {
 	raw, err := base64ext.DecodeString(string(text))
 	if err != nil {
@@ -378,7 +404,9 @@ func (k *PublicKey) UnmarshalCBOR(dec *cbor.Decoder) error {
 	return nil
 }
 
-// Verify verifies a digital signature with an optional context string.
+// Verify verifies a digital signature with an optional context string. The
+// context must match the one used for signing. A context longer than 255 bytes
+// is rejected with ErrInvalidSignature.
 func (k *PublicKey) Verify(message []byte, ctx []byte, sig *Signature) error {
 	if !mldsa65.Verify(k.key, message, ctx, sig[:]) {
 		return ErrInvalidSignature

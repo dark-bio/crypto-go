@@ -7,6 +7,10 @@
 // Package xdsa provides composite ML-DSA-65 + Ed25519 digital signatures.
 //
 // https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs
+//
+// A key signs a message with ML-DSA-65 and Ed25519 at once, and a signature
+// verifies only if both halves do. Keys and signatures round trip through
+// fixed size byte arrays. Keys also support DER and PEM serialization.
 package xdsa
 
 import (
@@ -52,11 +56,30 @@ const (
 )
 
 var (
-	ErrUnexpectedPemTag    = errors.New("xdsa: invalid PEM tag")
+	// ErrUnexpectedPemTag is returned by ParseSecretKeyPEM and ParsePublicKeyPEM
+	// when the PEM block type is not "PRIVATE KEY" or "PUBLIC KEY" respectively.
+	// The wrapping error carries the type found.
+	ErrUnexpectedPemTag = errors.New("xdsa: invalid PEM tag")
+
+	// ErrUnexpectedAlgorithm is returned by the DER parsers, and through them by
+	// the PEM parsers, when the key names an algorithm other than composite
+	// ML-DSA-65-Ed25519-SHA512.
 	ErrUnexpectedAlgorithm = errors.New("xdsa: not a composite ML-DSA-65-Ed25519-SHA512 key")
-	ErrMalformedKey        = errors.New("xdsa: malformed key")
-	ErrTrailingData        = errors.New("xdsa: trailing data in key encoding")
-	ErrInvalidSignature    = errors.New("xdsa: signature verification failed")
+
+	// ErrMalformedKey is returned by the fallible key constructors when a key
+	// encoding cannot be parsed or its contents are unusable. Causes include
+	// invalid component keys or sizes, unexpected algorithm parameters or an
+	// unsupported PKCS#8 version. The wrapping error names the problem.
+	ErrMalformedKey = errors.New("xdsa: malformed key")
+
+	// ErrTrailingData is returned by the DER parsers, and through them by the
+	// PEM parsers, when bytes follow the key structure or its last field.
+	ErrTrailingData = errors.New("xdsa: trailing data in key encoding")
+
+	// ErrInvalidSignature is returned by PublicKey.Verify when the signature
+	// does not verify under the key for the message. Either half failing
+	// produces it, and the halves are not told apart.
+	ErrInvalidSignature = errors.New("xdsa: signature verification failed")
 )
 
 // OID is the ASN.1 object identifier for MLDSA65-Ed25519-SHA512.
@@ -233,12 +256,19 @@ func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 	return &sig, nil
 }
 
-// SplitSign implements the xDSA signature algorithm, operating on split signers
-// instead of a composite secret key. This method is needed as currently there is
-// no hardware HSM that supports ML-DSA; but even when that arrives, composite
-// ML-DSA will probably not be shipped maybe ever. This method allows the user to
-// create the two signatures and combine them, *without* having to leak out the
-// internal signature scheme.
+// SplitSign creates a composite signature from separate ML-DSA-65 and Ed25519
+// signers instead of a composite secret key, so the two halves can be held
+// apart, such as one in hardware and one in software.
+//
+// Both halves sign the composite message M' derived from the raw message
+// according to the IETF composite signature spec:
+//
+//	M' = Prefix || Label || len(ctx) || ctx || PH(M)
+//	  where ctx is empty and PH is SHA512.
+//
+// The ML-DSA signer also receives the label "COMPSIG-MLDSA65-Ed25519-SHA512"
+// as its own context, separate from the empty ctx above. An error from either
+// signer is returned as is.
 func SplitSign(mlKey mldsa.Signer, edKey eddsa.Signer, message []byte) (*Signature, error) {
 	// Compute the M' that will be signed by the two keys
 	mPrime := cmldsaMessagePrime(message)
@@ -401,11 +431,13 @@ func (k *PublicKey) MarshalPEM() string {
 	return string(pem.Encode("PUBLIC KEY", k.MarshalDER()))
 }
 
+// MarshalText implements encoding.TextMarshaler.
 func (k *PublicKey) MarshalText() ([]byte, error) {
 	raw := k.Marshal()
 	return []byte(base64.StdEncoding.EncodeToString(raw[:])), nil
 }
 
+// UnmarshalText implements encoding.TextUnmarshaler.
 func (k *PublicKey) UnmarshalText(text []byte) error {
 	raw, err := base64ext.DecodeString(string(text))
 	if err != nil {

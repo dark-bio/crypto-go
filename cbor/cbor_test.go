@@ -1228,7 +1228,7 @@ func TestMapOptionalReusedDestination(t *testing.T) {
 		Nullable:    Option[uint64]{Some: true, Value: 7},
 		OptionalU64: Option[uint64]{Some: true, Value: 8},
 	}
-	// Wire: {1: 1, 3: null} — only required + nullable, optionals absent
+	// Wire: {1: 1, 3: null} (only required + nullable, optionals absent)
 	data := []byte{
 		0xa2,       // map(2)
 		0x01, 0x01, // key 1, uint 1
@@ -1492,7 +1492,7 @@ func TestMapEmbedPointer(t *testing.T) {
 }
 
 // Tests that a pointer embed with only some mandatory keys present is rejected.
-// Wire data has key 1 (from *Inner) but not key 2 — partial pointer embed.
+// Wire data has key 1 (from *Inner) but not key 2, a partial pointer embed.
 func TestMapEmbedPointerPartialRejected(t *testing.T) {
 	type Inner struct {
 		A uint64 `cbor:"1,key"`
@@ -1502,7 +1502,7 @@ func TestMapEmbedPointerPartialRejected(t *testing.T) {
 		*Inner
 		C uint64 `cbor:"3,key"`
 	}
-	// Hand-craft: {1: 42, 3: 7} — key 1 present (allocates *Inner) but key 2 missing
+	// Hand-craft: {1: 42, 3: 7}, key 1 present (allocates *Inner) but key 2 missing
 	data := []byte{
 		0xa2,             // map(2)
 		0x01, 0x18, 0x2a, // key 1, uint 42
@@ -1629,7 +1629,7 @@ func TestMapEmbedPointerNestedAllOrNone(t *testing.T) {
 		t.Errorf("none: expected Inner == nil, got %+v", decoded2.Inner)
 	}
 
-	// Partial: only key 1 (X from Sub) but not key 2 (Y) — rejected
+	// Partial: only key 1 (X from Sub) but not key 2 (Y), rejected
 	partial := []byte{
 		0xa2,       // map(2)
 		0x01, 0x01, // key 1, uint 1
@@ -1684,7 +1684,7 @@ func TestMapEmbedNestedPointerAllOrNone(t *testing.T) {
 		t.Errorf("none: expected A == nil, got %+v", decoded2.A)
 	}
 
-	// Outer active, inner nil: X present, Y absent — valid (*B is nil)
+	// Outer active, inner nil: X present, Y absent; valid (*B is nil)
 	outerOnly := O{A: &A{X: 1}, Z: 3}
 	data, err = Marshal(outerOnly)
 	if err != nil {
@@ -1699,7 +1699,7 @@ func TestMapEmbedNestedPointerAllOrNone(t *testing.T) {
 	}
 
 	// Bug case: inner key present (Y from *B), outer key missing (X from *A).
-	// Wire {2: val, 3: val} must fail — *B's activity propagates to *A,
+	// Wire {2: val, 3: val} must fail, since *B's activity propagates to *A,
 	// making X required.
 	partial := []byte{
 		0xa2,       // map(2)
@@ -1725,7 +1725,7 @@ func TestMapEmbedPointerKeyOrderRejected(t *testing.T) {
 		*Inner
 		C uint64 `cbor:"3,key"`
 	}
-	// Wire: {2: "x", 1: 42, 3: 7} — keys 2,1 out of order
+	// Wire: {2: "x", 1: 42, 3: 7} (keys 2,1 out of order)
 	data := []byte{
 		0xa3,             // map(3)
 		0x02, 0x61, 0x78, // key 2, text "x"
@@ -1751,12 +1751,12 @@ func TestMapEmbedPointerReusedDestination(t *testing.T) {
 		*Inner
 		C uint64 `cbor:"3,key"`
 	}
-	// Wire data: {3: 7} — only the direct field, no embed keys
+	// Wire data: {3: 7} (only the direct field, no embed keys)
 	data := []byte{
 		0xa1,       // map(1)
 		0x03, 0x07, // key 3, uint 7
 	}
-	// Destination has a pre-existing non-nil Inner — decode must nil it out
+	// Destination has a pre-existing non-nil Inner; decode must nil it out
 	dest := Outer{Inner: &Inner{A: 99, B: "stale"}, C: 0}
 	if err := Unmarshal(data, &dest); err != nil {
 		t.Fatalf("Unmarshal into pre-initialized dest: %v", err)
@@ -1981,7 +1981,7 @@ func TestMapEmbedSiblingsSameType(t *testing.T) {
 		Shared
 		R uint64 `cbor:"3,key"`
 	}
-	// Shared appears in both Left and Right — keys will collide (duplicate
+	// Shared appears in both Left and Right, so keys will collide (duplicate
 	// key 1), but the error must be about duplicate keys, not "recursive embed".
 	type Root struct {
 		Left
@@ -2011,7 +2011,7 @@ func TestMapEmbedUnknownKey(t *testing.T) {
 		Inner
 		C uint64 `cbor:"3,key"`
 	}
-	// Hand-craft CBOR: {1: 1, 2: "two", 3: 3, 99: 0} — key 99 is unknown
+	// Hand-craft CBOR: {1: 1, 2: "two", 3: 3, 99: 0} (key 99 is unknown)
 	enc := NewEncoder()
 	enc.EncodeMapHeader(4)
 	enc.EncodeInt(1)
@@ -2071,7 +2071,7 @@ func TestMapEmbedWireDuplicateKey(t *testing.T) {
 		Inner
 		C uint64 `cbor:"3,key"`
 	}
-	// Hand-craft CBOR: {1: 1, 1: 2, 2: "x", 3: 3} — duplicate key 1
+	// Hand-craft CBOR: {1: 1, 1: 2, 2: "x", 3: 3} (duplicate key 1)
 	// Header = 4 but only 3 fields → caught at header count check.
 	enc := NewEncoder()
 	enc.EncodeMapHeader(4)
@@ -2098,7 +2098,7 @@ func TestMapWireDuplicateKeyMidWalk(t *testing.T) {
 		B uint64 `cbor:"2,key"`
 		C uint64 `cbor:"3,key"`
 	}
-	// Wire: {1: 1, 1: 2, 3: 3} — header=3, fields=3, duplicate key 1
+	// Wire: {1: 1, 1: 2, 3: 3} (header=3, fields=3, duplicate key 1)
 	// Walk consumes key 1, then encounters key 1 again while expecting key 2.
 	enc := NewEncoder()
 	enc.EncodeMapHeader(3)
@@ -2122,7 +2122,7 @@ func TestMapWireDuplicateKeyTrailing(t *testing.T) {
 		A *uint64 `cbor:"1,key,optional"`
 		B uint64  `cbor:"3,key"`
 	}
-	// Wire: {3: 7, 3: 8} — header=2, fields=2, duplicate key 3.
+	// Wire: {3: 7, 3: 8} (header=2, fields=2, duplicate key 3).
 	// Walk: key 1 (optional) absent, key 3 matches and is consumed,
 	// then remaining=1 with another key 3 trailing.
 	enc := NewEncoder()
@@ -2146,7 +2146,7 @@ func TestMapEmbedUnknownKeyMidRange(t *testing.T) {
 		B uint64 `cbor:"3,key"`
 		C uint64 `cbor:"5,key"`
 	}
-	// Wire: {1: 1, 2: 2, 5: 5} — key 2 is unknown, between expected 1 and 3
+	// Wire: {1: 1, 2: 2, 5: 5} (key 2 is unknown, between expected 1 and 3)
 	enc := NewEncoder()
 	enc.EncodeMapHeader(3)
 	enc.EncodeInt(1)
@@ -2169,7 +2169,7 @@ func TestMapUnknownKeyTrailing(t *testing.T) {
 		A *uint64 `cbor:"1,key,optional"`
 		B uint64  `cbor:"3,key"`
 	}
-	// Wire: {3: 7, 2: 2} — key 2 is unknown, trailing after walk.
+	// Wire: {3: 7, 2: 2} (key 2 is unknown, trailing after walk).
 	enc := NewEncoder()
 	enc.EncodeMapHeader(2)
 	enc.EncodeInt(3)
@@ -2202,7 +2202,7 @@ func TestMapTrailingNonIntegerKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for non-integer trailing key, got nil")
 	}
-	// Must NOT be ErrInvalidMapKeyOrder or ErrUnexpectedItemCount —
+	// Must NOT be ErrInvalidMapKeyOrder or ErrUnexpectedItemCount, since
 	// those would mask the real problem (non-integer key type).
 	if errors.Is(err, ErrInvalidMapKeyOrder) {
 		t.Errorf("got ErrInvalidMapKeyOrder, want type/parse error: %v", err)

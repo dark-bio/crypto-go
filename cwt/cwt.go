@@ -12,18 +12,11 @@
 // provided as embeddable single-field structs (Issuer, Subject, etc.) that
 // can be composed into application-specific token types.
 //
-// # Example
-//
-//	type DeviceCert struct {
-//	    claims.Subject
-//	    claims.Expiration
-//	    claims.NotBefore
-//	    claims.Confirm[*xdsa.PublicKey]
-//	    UEID []byte `cbor:"256,key"`
-//	}
-//
-//	token, err := cwt.Issue(cert, signerKey, []byte("device-cert"))
-//	verified, err := cwt.Verify[DeviceCert](token, issuerPubKey, []byte("device-cert"), now)
+// Verify checks the signature against the supplied key and, when requested,
+// the nbf and exp time bounds. Applications must establish trust in that key,
+// check issuer and audience claims, and apply their own attestation policy.
+// EAT claim relationships and proof of possession of a cnf key are not
+// automatically checked.
 package cwt
 
 import (
@@ -37,10 +30,23 @@ import (
 
 // Errors returned by CWT operations.
 var (
-	ErrMissingNbf     = errors.New("cwt: missing nbf claim")
-	ErrNotYetValid    = errors.New("cwt: token not yet valid")
+	// ErrMissingNbf is returned by Verify when asked to check time but the
+	// claims carry no nbf, key 5.
+	ErrMissingNbf = errors.New("cwt: missing nbf claim")
+
+	// ErrNotYetValid is returned by Verify when the token's nbf lies after the
+	// time of the check. The wrapping error names both, in seconds since the
+	// Unix epoch.
+	ErrNotYetValid = errors.New("cwt: token not yet valid")
+
+	// ErrAlreadyExpired is returned by Verify when the token's exp is at or
+	// before the time of the check. The wrapping error names both, in seconds
+	// since the Unix epoch.
 	ErrAlreadyExpired = errors.New("cwt: token already expired")
-	ErrDuplicateKey   = errors.New("cwt: duplicate claim key")
+
+	// ErrDuplicateKey is returned by Verify when the claims map carries a
+	// temporal claim key twice.
+	ErrDuplicateKey = errors.New("cwt: duplicate claim key")
 )
 
 // Issue signs a set of claims as a CWT using COSE Sign1.
@@ -58,11 +64,17 @@ func Issue(claims any, signer xdsa.Signer, domain []byte) ([]byte, error) {
 // Verify verifies a CWT's COSE signature and temporal validity, then decodes
 // the claims into T.
 //
-// When now is non-nil, temporal claims are validated: nbf (key 5) must be present
-// and nbf <= *now, and if exp (key 4) is present then *now < exp. When now is nil,
-// temporal validation is skipped entirely.
+// When now is non-nil, temporal claims are validated. The nbf claim (key 5)
+// must be present and nbf <= *now, and if the exp claim (key 4) is present then
+// *now < exp. When now is nil, temporal validation is skipped entirely.
+//
+// The COSE signature timestamp is not checked; temporal validity comes from the
+// CWT claims. T determines the accepted claim schema. Successful verification
+// does not establish issuer trust, enforce an audience, evaluate attestation
+// policy or EAT claim relationships, or prove possession of a claims.Confirm
+// key. The application must perform those checks.
 func Verify[T any](data []byte, verifier *xdsa.PublicKey, domain []byte, now *uint64) (*T, error) {
-	// Verify COSE signature (skip COSE drift check — CWT handles temporal validation)
+	// Verify COSE signature (skip COSE drift check, CWT handles temporal validation)
 	raw, err := cose.Verify[cbor.Raw](data, cbor.Null{}, verifier, domain, nil)
 	if err != nil {
 		return nil, err

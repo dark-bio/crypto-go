@@ -17,16 +17,14 @@
 //   - Text:     string
 //   - Bytes:    []byte, [N]byte
 //   - Null:     cbor.Null, cbor.Option[T]{Some: false}
-//   - Arrays:
-//     []T (encoded as CBOR arrays)
-//     [N]T (encoded as CBOR arrays, length-checked on decode)
-//     structs tagged cbor:"_,array" (fields encoded in declaration order)
+//   - Arrays:   cbor.Unit, []T, [N]T (length-checked on decode), or structs
+//     tagged cbor:"_,array" (fields encoded in declaration order)
 //   - Maps:     structs with cbor:"N,key" fields (integer keys, deterministic order)
 //   - Raw:      cbor.Raw (opaque CBOR bytes, passed through without parsing)
 //
 // # Struct tags
 //
-// Array mode — fields encode positionally:
+// Array mode, fields encode positionally:
 //
 //	type Foo struct {
 //	    _ struct{} `cbor:"_,array"`
@@ -34,7 +32,7 @@
 //	    B string
 //	}
 //
-// Map mode — fields encode as key-value pairs sorted by CBOR key bytes:
+// Map mode, fields encode as key-value pairs sorted by CBOR key bytes:
 //
 //	type Bar struct {
 //	    X uint64          `cbor:"1,key"`          // required
@@ -63,9 +61,18 @@
 //
 // # Encoding rules
 //
-// All output is deterministic (RFC 8949 Section 4.2.1): canonical shortest-form integers,
-// map keys sorted by encoded bytes, no indefinite lengths, no floats, no tags.
-// Decoders reject non-canonical input, duplicate keys, and out-of-order keys.
+// Built-in types and tagged structs use deterministic encoding (RFC 8949
+// Section 4.2.1): shortest-form integers, map keys sorted by encoded bytes, no
+// indefinite lengths, no floats, and no tags. Their decoders enforce these
+// rules for the values they decode and reject unknown struct fields.
+//
+// Raw is an exception. Encoding copies its bytes without validation, and
+// decoding only walks enough structure to find an item's boundaries. A raw
+// item can contain duplicate or unsorted map keys, non-integer map keys, or
+// invalid UTF-8. Use Verify to validate the complete CBOR item, including any
+// raw fields, when the deterministic encoding rules are required. Custom
+// Marshaler and Unmarshaler implementations are responsible for their own
+// validation too.
 package cbor
 
 import (
@@ -78,12 +85,26 @@ import (
 
 // CBOR major types.
 const (
-	MajorUint   = 0
-	MajorNint   = 1
-	MajorBytes  = 2
-	MajorText   = 3
-	MajorArray  = 4
-	MajorMap    = 5
+	// MajorUint is the major type of unsigned integers.
+	MajorUint = 0
+
+	// MajorNint is the major type of negative integers.
+	MajorNint = 1
+
+	// MajorBytes is the major type of byte strings.
+	MajorBytes = 2
+
+	// MajorText is the major type of UTF-8 text strings.
+	MajorText = 3
+
+	// MajorArray is the major type of arrays.
+	MajorArray = 4
+
+	// MajorMap is the major type of maps.
+	MajorMap = 5
+
+	// MajorSimple is the major type of simple values, of which only booleans
+	// and null are supported.
 	MajorSimple = 7
 )
 
@@ -109,23 +130,70 @@ const maxInt = int(^uint(0) >> 1)
 // deeper than this are rejected to prevent stack overflow from recursive parsing.
 const maxDepth = 32
 
-// Error types for CBOR encoding/decoding failures
+// Errors returned by CBOR encoding and decoding.
 var (
-	ErrInvalidMajorType      = errors.New("invalid major type")
+	// ErrInvalidMajorType is returned when the next item has a major type other
+	// than the one expected. The wrapping error names both.
+	ErrInvalidMajorType = errors.New("invalid major type")
+
+	// ErrInvalidAdditionalInfo is returned when the additional info bits name an
+	// encoding outside the supported subset, indefinite lengths or reserved
+	// values.
 	ErrInvalidAdditionalInfo = errors.New("invalid additional info")
-	ErrUnexpectedEOF         = errors.New("unexpected end of data")
-	ErrNonCanonical          = errors.New("non-canonical encoding")
-	ErrInvalidUTF8           = errors.New("invalid UTF-8 in text string")
-	ErrTrailingBytes         = errors.New("unexpected trailing bytes")
-	ErrUnexpectedItemCount   = errors.New("unexpected item count")
-	ErrUnsupportedType       = errors.New("unsupported type")
-	ErrIntegerOverflow       = errors.New("integer overflow")
-	ErrDuplicateMapKey       = errors.New("duplicate map key")
-	ErrInvalidMapKeyOrder    = errors.New("invalid map key order")
-	ErrMissingMapKey         = errors.New("missing required map key")
-	ErrUnexpectedNil         = errors.New("unexpected nil value (field not marked optional)")
-	ErrUnexpectedNull        = errors.New("unexpected null value (field not marked optional)")
-	ErrMaxDepthExceeded      = errors.New("nesting depth exceeds maximum")
+
+	// ErrUnexpectedEOF is returned when the data ends inside an item, or when a
+	// length claims more items or bytes than remain.
+	ErrUnexpectedEOF = errors.New("unexpected end of data")
+
+	// ErrNonCanonical is returned when an integer or length is not in its
+	// shortest form.
+	ErrNonCanonical = errors.New("non-canonical encoding")
+
+	// ErrInvalidUTF8 is returned by EncodeText, DecodeText and Verify when a
+	// text string is not valid UTF-8.
+	ErrInvalidUTF8 = errors.New("invalid UTF-8 in text string")
+
+	// ErrTrailingBytes is returned when bytes follow the decoded item.
+	// Unmarshal, Decoder.Finish and Verify reject them.
+	ErrTrailingBytes = errors.New("unexpected trailing bytes")
+
+	// ErrUnexpectedItemCount is returned when an array, map or byte string has
+	// a length the target type does not allow, including a map that carries
+	// unknown keys. The wrapping error names both lengths.
+	ErrUnexpectedItemCount = errors.New("unexpected item count")
+
+	// ErrUnsupportedType is returned when encoding a Go type this package does
+	// not support, or when decoding a tag, a float or a simple value other than
+	// booleans and null.
+	ErrUnsupportedType = errors.New("unsupported type")
+
+	// ErrIntegerOverflow is returned when a decoded integer does not fit the
+	// target type. The wrapping error names the value and the limit.
+	ErrIntegerOverflow = errors.New("integer overflow")
+
+	// ErrDuplicateMapKey is returned when a decoded map carries the same key
+	// twice.
+	ErrDuplicateMapKey = errors.New("duplicate map key")
+
+	// ErrInvalidMapKeyOrder is returned when map keys are out of deterministic
+	// order.
+	ErrInvalidMapKeyOrder = errors.New("invalid map key order")
+
+	// ErrMissingMapKey is returned when a decoded map lacks a key the target
+	// struct requires.
+	ErrMissingMapKey = errors.New("missing required map key")
+
+	// ErrUnexpectedNil is returned when encoding a nil slice or pointer outside
+	// a struct field tagged optional.
+	ErrUnexpectedNil = errors.New("unexpected nil value (field not marked optional)")
+
+	// ErrUnexpectedNull is returned when decoding a null into a value that does
+	// not allow it.
+	ErrUnexpectedNull = errors.New("unexpected null value (field not marked optional)")
+
+	// ErrMaxDepthExceeded is returned by Verify, and when decoding a Raw item,
+	// if arrays or maps nest deeper than 32 levels.
+	ErrMaxDepthExceeded = errors.New("nesting depth exceeds maximum")
 )
 
 // Encoder is the low-level implementation of the CBOR encoder with only the
@@ -560,6 +628,12 @@ func mapKeyCmp(a, b int64) int {
 
 // Raw is a placeholder type to allow only partially parsing CBOR objects when
 // some part might depend on another (e.g. version tag, method in an RPC, etc).
+//
+// Encoding copies the bytes verbatim, without checking that they contain even
+// one valid CBOR item. Decoding traverses one item's structure and checks its
+// headers, lengths, supported types, and nesting depth, but does not validate
+// text as UTF-8 or check map key types, order, or duplicates. Use Verify on the
+// bytes when full validation of this package's CBOR subset is required.
 type Raw []byte
 
 // Null is a type that encodes/decodes as CBOR null (0xf6).
@@ -618,6 +692,11 @@ func skipObject(dec *Decoder, depth int) error {
 
 // Verify does a dry-run decoding to verify that only the tiny, strict subset
 // of types permitted by this package were used.
+//
+// It checks exactly one complete item, including UTF-8 text, deterministic
+// integer and length encodings, integer map keys in order without duplicates,
+// and the nesting limit. It does not validate application-specific schemas or
+// values.
 func Verify(data []byte) error {
 	dec := NewDecoder(data)
 	if err := verifyObject(dec, maxDepth); err != nil {

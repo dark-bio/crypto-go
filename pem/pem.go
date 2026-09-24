@@ -5,6 +5,10 @@
 // license that can be found in the LICENSE file.
 
 // Package pem provides strict PEM encoding and decoding.
+//
+// One block per input, no leading whitespace, and strict base64. Decode
+// documents the rules at the block boundaries and for line endings. Only an
+// optional final line ending may follow the footer.
 package pem
 
 import (
@@ -22,14 +26,35 @@ var (
 )
 
 var (
-	ErrMissingHeader      = errors.New("pem: missing PEM header")
-	ErrMalformedHeader    = errors.New("pem: malformed PEM header")
-	ErrEmptyBlockType     = errors.New("pem: empty PEM block type")
+	// ErrMissingHeader is returned when the input does not start with
+	// "-----BEGIN ". Leading whitespace counts as missing.
+	ErrMissingHeader = errors.New("pem: missing PEM header")
+
+	// ErrMalformedHeader is returned when the first line is not a complete
+	// "-----BEGIN TYPE-----" header. The wrapping error says what is missing.
+	ErrMalformedHeader = errors.New("pem: malformed PEM header")
+
+	// ErrEmptyBlockType is returned when the header names no block type.
+	ErrEmptyBlockType = errors.New("pem: empty PEM block type")
+
+	// ErrMalformedBlockType is returned when the block type is not valid UTF-8.
 	ErrMalformedBlockType = errors.New("pem: malformed PEM block type")
-	ErrMissingFooter      = errors.New("pem: missing PEM footer")
-	ErrTrailingData       = errors.New("pem: trailing data after PEM block")
-	ErrMalformedBody      = errors.New("pem: malformed PEM body")
-	ErrMalformedPayload   = errors.New("pem: malformed base64 payload")
+
+	// ErrMissingFooter is returned when no "-----END TYPE-----" footer matches
+	// the header's block type.
+	ErrMissingFooter = errors.New("pem: missing PEM footer")
+
+	// ErrTrailingData is returned when bytes follow the footer other than a
+	// single line ending matching the header.
+	ErrTrailingData = errors.New("pem: trailing data after PEM block")
+
+	// ErrMalformedBody is returned when the body between header and footer is
+	// empty or does not end in a line ending. The wrapping error says which.
+	ErrMalformedBody = errors.New("pem: malformed PEM body")
+
+	// ErrMalformedPayload is returned when the body is not strict base64. The
+	// wrapping error names the reason.
+	ErrMalformedPayload = errors.New("pem: malformed base64 payload")
 )
 
 // Decode decodes a single PEM block with strict validation.

@@ -21,6 +21,8 @@ var (
 // OEMID identifies the hardware manufacturer (key 258, RFC 9711 Section 4.2.3).
 // The OEM can be identified by a random ID, an IEEE OUI, or an IANA PEN.
 type OEMID struct {
+	// OEM holds the identifier in one of its three formats. Use the NewOEM
+	// constructors and the accessors to set and read it.
 	OEM oemidValue `cbor:"258,key"`
 }
 
