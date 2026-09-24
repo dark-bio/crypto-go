@@ -9,6 +9,7 @@ package cose
 import (
 	"errors"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -424,3 +425,40 @@ func TestSignerErrorPropagates(t *testing.T) {
 
 func ptr(v int64) *int64    { return &v }
 func uptr(v uint64) *uint64 { return &v }
+
+// Tests that the drift check measures the true distance between timestamps at
+// opposite ends of the int64 range, for embedded and detached signatures.
+func TestDriftRange(t *testing.T) {
+	signer := xdsa.GenerateKey()
+	tests := []struct {
+		name      string
+		timestamp int64
+		now       int64
+		maxDrift  uint64
+		wantOK    bool
+	}{
+		{name: "wrapping distance", timestamp: -9223372036854775740, now: 9223372036854775683, maxDrift: 209, wantOK: false},
+		{name: "full range within max", timestamp: math.MinInt64, now: math.MaxInt64, maxDrift: math.MaxUint64, wantOK: true},
+		{name: "full range over max", timestamp: math.MinInt64, now: math.MaxInt64, maxDrift: math.MaxUint64 - 1, wantOK: false},
+		{name: "near the maximum", timestamp: math.MaxInt64 - 5, now: math.MaxInt64, maxDrift: 5, wantOK: true},
+		{name: "near the minimum", timestamp: math.MinInt64 + 5, now: math.MinInt64, maxDrift: 5, wantOK: true},
+	}
+	for _, tt := range tests {
+		signed, err := SignAt([]byte("payload"), []byte{}, signer, nil, tt.timestamp)
+		if err != nil {
+			t.Fatalf("%s: failed to sign: %v", tt.name, err)
+		}
+		_, err = VerifyAt[[]byte](signed, []byte{}, signer.PublicKey(), nil, &tt.maxDrift, tt.now)
+		if (err == nil) != tt.wantOK || (err != nil && !errors.Is(err, ErrStaleSignature)) {
+			t.Errorf("%s: embedded: %v", tt.name, err)
+		}
+		signed, err = SignDetachedAt([]byte{}, signer, nil, tt.timestamp)
+		if err != nil {
+			t.Fatalf("%s: failed to sign detached: %v", tt.name, err)
+		}
+		err = VerifyDetachedAt(signed, []byte{}, signer.PublicKey(), nil, &tt.maxDrift, tt.now)
+		if (err == nil) != tt.wantOK || (err != nil && !errors.Is(err, ErrStaleSignature)) {
+			t.Errorf("%s: detached: %v", tt.name, err)
+		}
+	}
+}
