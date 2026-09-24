@@ -52,8 +52,9 @@ var (
 	// empty or does not end in a line ending. The wrapping error says which.
 	ErrMalformedBody = errors.New("pem: malformed PEM body")
 
-	// ErrMalformedPayload is returned when the body is not strict base64. The
-	// wrapping error names the reason.
+	// ErrMalformedPayload is returned when the body is not strict base64, or a
+	// line ends differently from the header. The wrapping error names the
+	// reason.
 	ErrMalformedPayload = errors.New("pem: malformed base64 payload")
 )
 
