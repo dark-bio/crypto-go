@@ -59,13 +59,21 @@ func example() (string, error) {
 
 	// Sign and encrypt a payload to the recipient, then open and verify it back.
 	// The second argument is authenticated but must be supplied separately.
-	sealed, err := cose.Seal("payload", "metadata", signer, recipient.PublicKey(), domain)
+	padding := cose.BucketPadding{Floor: 8192, Step: 20}
+	sealed, err := cose.Seal("payload", "metadata", signer, recipient.PublicKey(), domain, padding)
 	if err != nil {
 		return "", err
 	}
 	return cose.Open[string](sealed, "metadata", recipient, signer.PublicKey(), domain, &drift)
 }
 ```
+
+Sealing pads the signed envelope with zeros inside the encryption, as many as
+the sender's `cose.Padding` policy picks. `cose.NoPadding{}` adds none, and
+`cose.BucketPadding` pads to the smallest of a series of sizes that starts at
+`Floor` and grows by `1/Step` of each. A nil policy or a parameter below 1
+panics. Receivers strip any number of zeros without knowing the policy, and
+refuse a nonzero byte.
 
 ## CBOR struct tags
 
