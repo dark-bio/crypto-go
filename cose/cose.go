@@ -48,6 +48,12 @@
 //     msgToAuth; the complete encoded Enc_structure is passed as HPKE AAD. HPKE
 //     key derivation uses DomainPrefix || domain as its info. The X-Wing
 //     encapsulated key is carried in unprotected header -4.
+//   - The encryption plaintext is the encoded COSE_Sign1 followed by zero
+//     bytes, as many as the sender's Padding policy picks. The signature does
+//     not cover them, while the encryption authenticates them. A receiver finds
+//     the end of the COSE_Sign1 by decoding it and refuses a nonzero byte after
+//     it. It accepts any number of zeros, none included, so a sender can change
+//     its policy without its receivers.
 //
 // Here bstr denotes a CBOR byte string and || denotes byte concatenation. The
 // domain and msgToAuth are not included in the returned envelope; both parties
@@ -122,6 +128,10 @@ var (
 	// also returned when Encrypt, or Seal through it, fails. The wrapping error
 	// carries the xHPKE error text.
 	ErrDecryptionFailed = errors.New("cose: decryption failed")
+
+	// ErrInvalidPadding is returned when the decrypted plaintext holds a nonzero
+	// byte after its COSE_Sign1.
+	ErrInvalidPadding = errors.New("cose: invalid padding")
 )
 
 // sigProtectedHeader is the protected header for COSE_Sign1.
@@ -640,10 +650,13 @@ func Peek[T any](signature []byte) (T, error) {
 //   - signer: The xDSA signer, a secret key or a remote or hardware one
 //   - recipient: The xHPKE public key to encrypt to
 //   - domain: Application domain for HPKE key derivation
+//   - padding: Sender's policy for zeros after the signed envelope
 //
 // Returns the serialized COSE_Encrypt0 structure containing the encrypted COSE_Sign1.
-func Seal(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.PublicKey, domain []byte) ([]byte, error) {
-	return SealAt(msgToSeal, msgToAuth, signer, recipient, domain, time.Now().Unix())
+// It panics if padding is nil, a BucketPadding parameter is below 1, or the
+// required bucket size overflows int.
+func Seal(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.PublicKey, domain []byte, padding Padding) ([]byte, error) {
+	return SealAt(msgToSeal, msgToAuth, signer, recipient, domain, padding, time.Now().Unix())
 }
 
 // SealAt signs a message then encrypts it to a recipient with an explicit timestamp.
@@ -653,10 +666,13 @@ func Seal(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.PublicK
 //   - signer: The xDSA signer, a secret key or a remote or hardware one
 //   - recipient: The xHPKE public key to encrypt to
 //   - domain: Application domain for HPKE key derivation
+//   - padding: Sender's policy for zeros after the signed envelope
 //   - timestamp: Unix timestamp in seconds to embed in the signature's protected header
 //
 // Returns the serialized COSE_Encrypt0 structure containing the encrypted COSE_Sign1.
-func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.PublicKey, domain []byte, timestamp int64) ([]byte, error) {
+// It panics if padding is nil, a BucketPadding parameter is below 1, or the
+// required bucket size overflows int.
+func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.PublicKey, domain []byte, padding Padding, timestamp int64) ([]byte, error) {
 	// Pre-encode for internal use
 	seal, err := cbor.Marshal(msgToSeal)
 	if err != nil {
@@ -673,7 +689,7 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 	}
 
 	// Encrypt the signed message to the recipient
-	return Encrypt(signed, cbor.Raw(auth), recipient, domain)
+	return Encrypt(signed, cbor.Raw(auth), recipient, domain, padding)
 }
 
 // Encrypt encrypts an already-signed COSE_Sign1 to a recipient.
@@ -686,9 +702,21 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 //   - msgToAuth: The same additional authenticated data used during sealing
 //   - recipient: The xHPKE public key to encrypt to
 //   - domain: Application domain for HPKE key derivation
+//   - padding: Sender's policy for zeros after the signed envelope
 //
 // Returns the serialized COSE_Encrypt0 structure.
-func Encrypt(sign1 []byte, msgToAuth any, recipient *xhpke.PublicKey, domain []byte) ([]byte, error) {
+// It panics if padding is nil, a BucketPadding parameter is below 1, or the
+// required bucket size overflows int.
+func Encrypt(sign1 []byte, msgToAuth any, recipient *xhpke.PublicKey, domain []byte, padding Padding) ([]byte, error) {
+	// Copy into the final allocation, keeping the caller's envelope unchanged
+	if padding == nil {
+		panic("cose: padding must not be nil")
+	}
+	plaintext := make([]byte, padding.paddedSize(len(sign1)))
+	defer clear(plaintext)
+	copy(plaintext, sign1)
+
+	// Pre-encode for Enc_structure's external AAD
 	auth, err := cbor.Marshal(msgToAuth)
 	if err != nil {
 		return nil, err
@@ -711,7 +739,7 @@ func Encrypt(sign1 []byte, msgToAuth any, recipient *xhpke.PublicKey, domain []b
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	encapKey, ciphertext, err := recipient.Seal(sign1, aad, domain)
+	encapKey, ciphertext, err := recipient.Seal(plaintext, aad, domain)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
 	}
@@ -784,6 +812,11 @@ func OpenAt[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, 
 // This allows inspecting the signer (via Signer) before verification. Use
 // Verify or VerifyAt to verify the decrypted COSE_Sign1 bytes.
 //
+// It strips the zero bytes after the COSE_Sign1, accepting any number of them,
+// and returns the COSE_Sign1 as encoded. A plaintext that does not start with
+// one CBOR item fails with the cbor error, and a nonzero byte after it with
+// ErrInvalidPadding.
+//
 //   - msgToOpen: The serialized COSE_Encrypt0 structure
 //   - msgToAuth: The same additional authenticated data used during sealing
 //   - recipient: The xHPKE secret key to decrypt with
@@ -823,9 +856,22 @@ func Decrypt(msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, domain
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
-	signed, err := recipient.Open(&encapKey, encrypt0.Ciphertext, aad, domain)
+	plaintext, err := recipient.Open(&encapKey, encrypt0.Ciphertext, aad, domain)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrDecryptionFailed, err)
+	}
+	defer clear(plaintext)
+
+	// Traverse one item without re-encoding, then check its authenticated tail
+	signed, err := cbor.NewDecoder(plaintext).DecodeRaw()
+	if err != nil {
+		return nil, err
+	}
+	for _, b := range plaintext[len(signed):] {
+		if b != 0 {
+			clear(signed)
+			return nil, ErrInvalidPadding
+		}
 	}
 	return signed, nil
 }

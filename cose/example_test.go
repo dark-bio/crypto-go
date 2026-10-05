@@ -34,10 +34,12 @@ func Example() {
 
 	// Sign and encrypt to a recipient in one step, then open and verify it back
 	recipient := xhpke.GenerateKey()
-	sealed, err := cose.Seal("secret", "context", signer, recipient.PublicKey(), []byte("example"))
+	padding := cose.BucketPadding{Floor: 8192, Step: 20}
+	sealed, err := cose.Seal("secret", "context", signer, recipient.PublicKey(), []byte("example"), padding)
 	if err != nil {
 		log.Fatal(err)
 	}
+	fmt.Printf("sealed: %d bytes\n", len(sealed))
 	opened, err := cose.Open[string](sealed, "context", recipient, signer.PublicKey(), []byte("example"), &drift)
 	if err != nil {
 		log.Fatal(err)
@@ -45,5 +47,6 @@ func Example() {
 	fmt.Println(opened)
 	// Output:
 	// hello
+	// sealed: 9381 bytes
 	// secret
 }

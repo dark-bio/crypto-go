@@ -326,9 +326,9 @@ func TestSealOpen(t *testing.T) {
 			var sealed []byte
 			var err error
 			if tt.timestamp != nil {
-				sealed, err = SealAt(&tt.msgToSeal, &tt.msgToAuth, alice, carol.PublicKey(), tt.domain, *tt.timestamp)
+				sealed, err = SealAt(&tt.msgToSeal, &tt.msgToAuth, alice, carol.PublicKey(), tt.domain, NoPadding{}, *tt.timestamp)
 			} else {
-				sealed, err = Seal(&tt.msgToSeal, &tt.msgToAuth, alice, carol.PublicKey(), tt.domain)
+				sealed, err = Seal(&tt.msgToSeal, &tt.msgToAuth, alice, carol.PublicKey(), tt.domain, NoPadding{})
 			}
 			if err != nil {
 				t.Fatalf("Seal failed: %v", err)
@@ -414,7 +414,7 @@ func TestSignerErrorPropagates(t *testing.T) {
 	}{
 		{"Sign", func() ([]byte, error) { return Sign(&msg, &msg, signer, []byte("domain")) }},
 		{"SignDetached", func() ([]byte, error) { return SignDetached(&msg, signer, []byte("domain")) }},
-		{"Seal", func() ([]byte, error) { return Seal(&msg, &msg, signer, recipient, []byte("domain")) }},
+		{"Seal", func() ([]byte, error) { return Seal(&msg, &msg, signer, recipient, []byte("domain"), NoPadding{}) }},
 	}
 	for _, tt := range tests {
 		if _, err := tt.call(); !errors.Is(err, errSignerUnavailable) {
