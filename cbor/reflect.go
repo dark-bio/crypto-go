@@ -367,6 +367,9 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		if err != nil {
 			return err
 		}
+		if v.OverflowUint(val) {
+			return ErrIntegerOverflow
+		}
 		v.SetUint(val)
 		return nil
 
@@ -374,6 +377,9 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		val, err := dec.DecodeInt()
 		if err != nil {
 			return err
+		}
+		if v.OverflowInt(val) {
+			return ErrIntegerOverflow
 		}
 		v.SetInt(val)
 		return nil
