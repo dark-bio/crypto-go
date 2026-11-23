@@ -149,3 +149,38 @@ func TestExpand(t *testing.T) {
 		}
 	}
 }
+
+// TestLengthBounds verifies that Key and Expand accept output lengths from 0
+// up to the RFC 5869 maximum (255 * 32 bytes) and panic on negative or
+// oversized lengths.
+func TestLengthBounds(t *testing.T) {
+	secret := []byte("0123456789abcdef")
+	prk := Extract(secret, []byte("salt"))
+
+	for _, n := range []int{0, 255 * 32} {
+		if got := Key(secret, []byte("salt"), []byte("info"), n); len(got) != n {
+			t.Errorf("Key(n=%d): got len %d", n, len(got))
+		}
+		if got := Expand(prk, []byte("info"), n); len(got) != n {
+			t.Errorf("Expand(n=%d): got len %d", n, len(got))
+		}
+	}
+	for _, n := range []int{-1, 255*32 + 1, 1 << 30} {
+		t.Run("Key", func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Key(n=%d): expected panic", n)
+				}
+			}()
+			Key(secret, []byte("salt"), []byte("info"), n)
+		})
+		t.Run("Expand", func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("Expand(n=%d): expected panic", n)
+				}
+			}()
+			Expand(prk, []byte("info"), n)
+		})
+	}
+}

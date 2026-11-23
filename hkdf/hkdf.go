@@ -14,22 +14,22 @@
 package hkdf
 
 import (
+	"crypto/hkdf"
 	"crypto/sha256"
-	"io"
-
-	"golang.org/x/crypto/hkdf"
 )
 
 // Key derives a key of length n from the secret, salt, and info using
 // HKDF-SHA256. The salt and info may be nil or empty.
 //
-// Panics if n exceeds the maximum output length for SHA-256 HKDF, which is
-// 255 * 32 = 8160 bytes.
+// Panics if n is negative or exceeds the maximum output length for SHA-256
+// HKDF, which is 255 * 32 = 8160 bytes.
 func Key(secret, salt, info []byte, n int) []byte {
-	r := hkdf.New(sha256.New, secret, salt, info)
-	out := make([]byte, n)
-	if _, err := io.ReadFull(r, out); err != nil {
-		panic("hkdf: " + err.Error())
+	if n < 0 {
+		panic("hkdf: negative output length")
+	}
+	out, err := hkdf.Key(sha256.New, secret, salt, string(info), n)
+	if err != nil {
+		panic(err.Error())
 	}
 	return out
 }
@@ -41,7 +41,10 @@ func Key(secret, salt, info []byte, n int) []byte {
 // Expand invocations and different context values. Most common scenarios, including
 // the generation of multiple keys, should use Key instead.
 func Extract(secret, salt []byte) [32]byte {
-	blob := hkdf.Extract(sha256.New, secret, salt)
+	blob, err := hkdf.Extract(sha256.New, secret, salt)
+	if err != nil {
+		panic(err.Error())
+	}
 	if len(blob) != 32 {
 		panic("hkdf: incorrect pseudorandom key length")
 	}
@@ -57,13 +60,15 @@ func Extract(secret, salt []byte) [32]byte {
 // random or pseudorandom cryptographically strong key. See RFC 5869, Section 3.3.
 // Most common scenarios will want to use Key instead.
 //
-// Panics if n exceeds the maximum output length for SHA-256 HKDF, which is
-// 255 * 32 = 8160 bytes.
+// Panics if n is negative or exceeds the maximum output length for SHA-256
+// HKDF, which is 255 * 32 = 8160 bytes.
 func Expand(prk [32]byte, info []byte, n int) []byte {
-	r := hkdf.Expand(sha256.New, prk[:], info)
-	out := make([]byte, n)
-	if _, err := io.ReadFull(r, out); err != nil {
-		panic("hkdf: " + err.Error())
+	if n < 0 {
+		panic("hkdf: negative output length")
+	}
+	out, err := hkdf.Expand(sha256.New, prk[:], string(info), n)
+	if err != nil {
+		panic(err.Error())
 	}
 	return out
 }
