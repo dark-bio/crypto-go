@@ -101,6 +101,9 @@ func ParseSecretKey(b [SecretKeySize]byte) (*SecretKey, error) {
 	if n.BitLen() != 2048 {
 		return nil, fmt.Errorf("%w: modulus must be 2048 bits", ErrMalformedKey)
 	}
+	if n.Bit(0) == 0 {
+		return nil, fmt.Errorf("%w: modulus must be odd", ErrMalformedKey)
+	}
 	// Whilst the RSA algorithm permits different exponents, every modern
 	// system only ever uses 65537 and most also enforce this. Might as
 	// well do the same.

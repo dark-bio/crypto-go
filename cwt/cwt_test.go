@@ -7,6 +7,7 @@
 package cwt
 
 import (
+	"bytes"
 	"errors"
 	"testing"
 
@@ -90,6 +91,18 @@ func TestVerifySkipTime(t *testing.T) {
 	}
 	if got.Sub != "test" {
 		t.Fatalf("subject: got %q, want %q", got.Sub, "test")
+	}
+
+	// Raw claims need integer time bounds only when a reference time is supplied
+	token, err = IssueAt(cbor.Raw{0xa1, 5, 0xf6}, issuer, nil, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify[cbor.Raw](token, issuer.PublicKey(), nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify[cbor.Raw](token, issuer.PublicKey(), nil, ptr(0)); !errors.Is(err, cbor.ErrInvalidMajorType) {
+		t.Fatalf("null nbf: %v", err)
 	}
 }
 
@@ -286,30 +299,76 @@ func TestVerifyNoExpiration(t *testing.T) {
 	}
 }
 
-// TestVerifyDuplicateNbf tests that duplicate temporal claim keys are rejected.
-func TestVerifyDuplicateNbf(t *testing.T) {
+// TestIssueAt checks the timestamp in the signed COSE header.
+func TestIssueAt(t *testing.T) {
 	issuer := xdsa.GenerateKey()
-
-	// Manually construct a CBOR map with duplicate nbf (key 5)
-	enc := cbor.NewEncoder()
-	enc.EncodeMapHeader(3)
-	enc.EncodeInt(2)
-	if err := enc.EncodeText("test"); err != nil {
-		t.Fatalf("encode text: %v", err)
-	}
-	enc.EncodeInt(5)
-	enc.EncodeUint(1000000)
-	enc.EncodeInt(5) // duplicate nbf
-	enc.EncodeUint(2000000)
-
-	// Sign the raw payload via COSE (bypassing CWT's encoder)
-	token, err := cose.Sign(cbor.Raw(enc.Bytes()), cbor.Null{}, issuer, []byte("test"))
+	const timestamp = 1_700_000_000
+	token, err := IssueAt(claims.Subject{Sub: "test"}, issuer, nil, timestamp)
 	if err != nil {
-		t.Fatalf("sign: %v", err)
+		t.Fatal(err)
 	}
-	// Verify should fail with ErrDuplicateKey before claims decoding
-	_, err = Verify[simpleCert](token, issuer.PublicKey(), []byte("test"), ptr(1500000))
-	if !errors.Is(err, ErrDuplicateKey) {
-		t.Fatalf("expected ErrDuplicateKey, got %v", err)
+	got, err := cose.VerifyAt[claims.Subject](token, cbor.Null{}, issuer.PublicKey(), nil, ptr(0), timestamp)
+	if err != nil || got.Sub != "test" {
+		t.Fatalf("timestamp %d: got %+v, %v", timestamp, got, err)
+	}
+}
+
+// TestIssueRequiresClaimsMap checks the claims wire format at both issuance entry points.
+func TestIssueRequiresClaimsMap(t *testing.T) {
+	issuer := xdsa.GenerateKey()
+	for _, tt := range []struct {
+		claims any
+		err    error
+	}{
+		{true, cbor.ErrInvalidMajorType},
+		{cbor.Raw{0x80}, cbor.ErrInvalidMajorType},
+		{cbor.Raw{0xa2, 5, 0, 1, 0}, cbor.ErrInvalidMapKeyOrder},
+		{cbor.Raw{0xa2, 4, 1, 4, 1}, cbor.ErrDuplicateMapKey},
+		{cbor.Raw{0xa1, 1, 0x61, 0xff}, cbor.ErrInvalidUTF8},
+		{cbor.Raw{0xa0, 0}, cbor.ErrTrailingBytes},
+	} {
+		if _, err := Issue(tt.claims, issuer, nil); !errors.Is(err, tt.err) {
+			t.Errorf("Issue(%v): got %v, want %v", tt.claims, err, tt.err)
+		}
+		if _, err := IssueAt(tt.claims, issuer, nil, 1); !errors.Is(err, tt.err) {
+			t.Errorf("IssueAt(%v): got %v, want %v", tt.claims, err, tt.err)
+		}
+	}
+}
+
+// TestVerifyClaimsWireFormat checks signed raw claims with and without a reference time.
+func TestVerifyClaimsWireFormat(t *testing.T) {
+	issuer := xdsa.GenerateKey()
+	overDepth := append([]byte{0xa2, 1}, bytes.Repeat([]byte{0x81}, 31)...)
+	overDepth = append(overDepth, 0, 5, 0)
+	for _, tt := range []struct {
+		name string
+		raw  cbor.Raw
+		err  error
+	}{
+		{"truncated", cbor.Raw{0xa1, 1}, cbor.ErrUnexpectedEOF},
+		{"non-map", cbor.Raw{0x80}, cbor.ErrInvalidMajorType},
+		{"trailing", cbor.Raw{0xa0, 0}, cbor.ErrTrailingBytes},
+		{"unsorted", cbor.Raw{0xa2, 5, 0, 1, 0}, cbor.ErrInvalidMapKeyOrder},
+		{"duplicate", cbor.Raw{0xa3, 1, 0, 1, 0, 5, 0}, cbor.ErrDuplicateMapKey},
+		{"duplicate exp", cbor.Raw{0xa2, 4, 1, 4, 1}, ErrDuplicateKey},
+		{"duplicate nbf", cbor.Raw{0xa2, 5, 0, 5, 0}, ErrDuplicateKey},
+		{"nested UTF-8", cbor.Raw{0xa2, 1, 0x81, 0x61, 0xff, 5, 0}, cbor.ErrInvalidUTF8},
+		{"nested duplicate", cbor.Raw{0xa2, 1, 0xa2, 4, 0, 4, 0, 5, 0}, cbor.ErrDuplicateMapKey},
+		{"nested order", cbor.Raw{0xa2, 1, 0xa2, 2, 0, 1, 0, 5, 0}, cbor.ErrInvalidMapKeyOrder},
+		{"over depth", overDepth, cbor.ErrMaxDepthExceeded},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			// Sign through COSE to present the malformed claims with a valid signature
+			token, err := cose.SignAt(tt.raw, cbor.Null{}, issuer, nil, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, now := range []*uint64{nil, ptr(0)} {
+				if _, err := Verify[cbor.Raw](token, issuer.PublicKey(), nil, now); !errors.Is(err, tt.err) {
+					t.Errorf("time check %t: got %v, want %v", now != nil, err, tt.err)
+				}
+			}
+		})
 	}
 }

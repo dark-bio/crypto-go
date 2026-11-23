@@ -71,6 +71,9 @@ var unitType = reflect.TypeOf(Unit{})
 // nullType is used for type comparison in reflection.
 var nullType = reflect.TypeOf(Null{})
 
+// optionPkgPath identifies the package that declares Option[T].
+var optionPkgPath = reflect.TypeFor[Option[int]]().PkgPath()
+
 // Option represents a value that may be absent, encoding as CBOR null when
 // Some is false. As a struct field without the "optional" tag, its key is
 // always present with a value or null. With the tag, an absent value omits the
@@ -95,19 +98,22 @@ func MakeNone[T any]() Option[T] {
 
 // isOptionType checks if a type is Option[T] for some T.
 func isOptionType(t reflect.Type) bool {
-	if t.Kind() != reflect.Struct {
-		return false
-	}
-	if t.NumField() != 2 {
-		return false
-	}
-	f0, f1 := t.Field(0), t.Field(1)
-	return f0.Name == "Value" && f1.Name == "Some" && f1.Type.Kind() == reflect.Bool
+	return t.PkgPath() == optionPkgPath && strings.HasPrefix(t.Name(), "Option[")
 }
 
 // encodeValue recursively encodes a reflect.Value to CBOR.
 // The optional flag indicates whether nil values are allowed (from struct tag).
 func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
+	if !v.IsValid() {
+		return ErrUnexpectedNil
+	}
+	if (v.Kind() == reflect.Pointer || v.Kind() == reflect.Slice) && v.IsNil() {
+		if !optional {
+			return ErrUnexpectedNil
+		}
+		enc.EncodeNull()
+		return nil
+	}
 	// Check if the value implements Marshaler (try pointer first, then value).
 	// When the value is not addressable (e.g. passed by value through an any
 	// interface), make a temporary addressable copy so pointer-receiver methods
@@ -153,24 +159,10 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 		}
 		// []byte encodes as CBOR byte string
 		if v.Type().Elem().Kind() == reflect.Uint8 {
-			if v.IsNil() {
-				if !optional {
-					return ErrUnexpectedNil
-				}
-				enc.EncodeNull()
-				return nil
-			}
 			enc.EncodeBytes(v.Bytes())
 			return nil
 		}
 		// []T is encoded as a CBOR array
-		if v.IsNil() {
-			if !optional {
-				return ErrUnexpectedNil
-			}
-			enc.EncodeNull()
-			return nil
-		}
 		enc.EncodeArrayHeader(v.Len())
 		for i := range v.Len() {
 			if err := encodeValue(enc, v.Index(i), false); err != nil {
@@ -283,13 +275,6 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 		return nil
 
 	case reflect.Ptr:
-		if v.IsNil() {
-			if !optional {
-				return ErrUnexpectedNil
-			}
-			enc.EncodeNull()
-			return nil
-		}
 		return encodeValue(enc, v.Elem(), false)
 
 	default:
@@ -308,9 +293,19 @@ func Unmarshal(data []byte, v any) error {
 	return dec.Finish()
 }
 
-// Decode reads a value from the decoder using reflection.
+// Decode reads the next value into v, which must be a non-nil pointer.
 func (dec *Decoder) Decode(v any) error {
-	return decodeValue(dec, reflect.ValueOf(v), false)
+	target := reflect.ValueOf(v)
+	if !target.IsValid() {
+		return ErrUnexpectedNil
+	}
+	if target.Kind() != reflect.Pointer {
+		return fmt.Errorf("%w: decode target must be a pointer", ErrUnsupportedType)
+	}
+	if target.IsNil() {
+		return ErrUnexpectedNil
+	}
+	return decodeValue(dec, target, false)
 }
 
 // decodeValue recursively decodes CBOR into a reflect.Value.
@@ -331,19 +326,15 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 	}
 	// Handle pointer types specially - null decodes as nil pointer
 	if v.Kind() == reflect.Ptr {
-		// Option[T] handles null internally, so don't intercept it here.
-		// Raw captures any CBOR value (including null) as raw bytes,
-		// so don't intercept null for *Raw either.
-		if !isOptionType(v.Type().Elem()) && v.Type().Elem() != reflect.TypeOf(Raw{}) {
-			if dec.PeekNull() {
-				if !optional {
-					return ErrUnexpectedNull
-				}
-				if err := dec.DecodeNull(); err != nil {
-					return err
-				}
-				v.Set(reflect.Zero(v.Type()))
-				return nil
+		// Raw and Option handle null themselves
+		elem := v.Type().Elem()
+		if dec.PeekNull() && elem != reflect.TypeOf(Raw{}) && !isOptionType(elem) {
+			if optional {
+				v.SetZero()
+				return dec.DecodeNull()
+			}
+			if elem != nullType {
+				return ErrUnexpectedNull
 			}
 		}
 		if v.IsNil() {
@@ -367,6 +358,9 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		if err != nil {
 			return err
 		}
+		if v.OverflowUint(val) {
+			return fmt.Errorf("%w: %d does not fit %s", ErrIntegerOverflow, val, v.Type())
+		}
 		v.SetUint(val)
 		return nil
 
@@ -374,6 +368,9 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		val, err := dec.DecodeInt()
 		if err != nil {
 			return err
+		}
+		if v.OverflowInt(val) {
+			return fmt.Errorf("%w: %d does not fit %s", ErrIntegerOverflow, val, v.Type())
 		}
 		v.SetInt(val)
 		return nil
@@ -435,11 +432,18 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		}
 		n := int(length)
 		if v.IsNil() || v.Cap() < n {
-			v.Set(reflect.MakeSlice(v.Type(), n, n))
+			// Bound the initial allocation by the wire bytes available for elements
+			elemSize := max(v.Type().Elem().Size(), 1)
+			capacity := min(n, int(uintptr(len(dec.data)-dec.pos)/elemSize))
+			v.Set(reflect.MakeSlice(v.Type(), capacity, capacity))
 		} else {
 			v.SetLen(n)
 		}
 		for i := range n {
+			if i == v.Len() {
+				v.Grow(1)
+				v.SetLen(min(n, v.Cap()))
+			}
 			if err := decodeValue(dec, v.Index(i), false); err != nil {
 				return err
 			}
@@ -854,7 +858,7 @@ func collectMapFields(t reflect.Type, prefix []int, gs *ptrGroupState, visited m
 		}
 		key, err := strconv.ParseInt(parts[0], 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("%w: field %s has invalid key key %q", ErrUnsupportedType, f.Name, parts[0])
+			return nil, fmt.Errorf("%w: field %s has invalid key %q", ErrUnsupportedType, f.Name, parts[0])
 		}
 		if optional && !isOptionalCapable(f.Type) {
 			return nil, fmt.Errorf("%w: field %s is optional but type %s is not nilable (use *T, []T, or Option[T])", ErrUnsupportedType, f.Name, f.Type)

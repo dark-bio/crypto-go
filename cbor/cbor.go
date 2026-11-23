@@ -126,8 +126,8 @@ const (
 // maxInt is the maximum value of int, used for overflow checks.
 const maxInt = int(^uint(0) >> 1)
 
-// maxDepth is the maximum nesting depth for CBOR arrays and maps. Inputs nested
-// deeper than this are rejected to prevent stack overflow from recursive parsing.
+// maxDepth is the maximum number of levels in a CBOR item, counting the root
+// and the innermost value.
 const maxDepth = 32
 
 // Errors returned by CBOR encoding and decoding.
@@ -183,16 +183,16 @@ var (
 	// struct requires.
 	ErrMissingMapKey = errors.New("missing required map key")
 
-	// ErrUnexpectedNil is returned when encoding a nil slice or pointer outside
-	// a struct field tagged optional.
+	// ErrUnexpectedNil is returned for a nil decode target or when encoding a
+	// nil value outside a struct field tagged optional.
 	ErrUnexpectedNil = errors.New("unexpected nil value (field not marked optional)")
 
 	// ErrUnexpectedNull is returned when decoding a null into a value that does
 	// not allow it.
 	ErrUnexpectedNull = errors.New("unexpected null value (field not marked optional)")
 
-	// ErrMaxDepthExceeded is returned by Verify, and when decoding a Raw item,
-	// if arrays or maps nest deeper than 32 levels.
+	// ErrMaxDepthExceeded is returned by Verify and Raw decoding when an item
+	// exceeds 32 levels, counting the root.
 	ErrMaxDepthExceeded = errors.New("nesting depth exceeds maximum")
 )
 
@@ -448,6 +448,24 @@ func (d *Decoder) DecodeMapHeader() (uint64, error) {
 	return length, nil
 }
 
+// DecodeMapKey reads an integer key in deterministic order after prev.
+// Pass nil for the first key in a map.
+func (d *Decoder) DecodeMapKey(prev *int64) (int64, error) {
+	key, err := d.DecodeInt()
+	if err != nil {
+		return 0, err
+	}
+	if prev != nil {
+		if key == *prev {
+			return 0, fmt.Errorf("%w: %d", ErrDuplicateMapKey, key)
+		}
+		if mapKeyCmp(*prev, key) > 0 {
+			return 0, fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, key, *prev)
+		}
+	}
+	return key, nil
+}
+
 // DecodeBool decodes a CBOR boolean value.
 func (d *Decoder) DecodeBool() (bool, error) {
 	if d.pos >= len(d.data) {
@@ -462,6 +480,9 @@ func (d *Decoder) DecodeBool() (bool, error) {
 		d.pos++
 		return true, nil
 	default:
+		if b>>5 == MajorSimple {
+			return false, ErrUnsupportedType
+		}
 		return false, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, b>>5, MajorSimple)
 	}
 }
@@ -472,8 +493,11 @@ func (d *Decoder) DecodeNull() error {
 		return ErrUnexpectedEOF
 	}
 	b := d.data[d.pos]
-	if b != MajorSimple<<5|simpleNull {
+	if b>>5 != MajorSimple {
 		return fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, b>>5, MajorSimple)
+	}
+	if b != MajorSimple<<5|simpleNull {
+		return ErrUnsupportedType
 	}
 	d.pos++
 	return nil
@@ -555,6 +579,10 @@ func (d *Decoder) decodeHeader() (uint8, uint64, error) {
 	default:
 		return 0, 0, fmt.Errorf("%w: %d", ErrInvalidAdditionalInfo, info)
 	}
+	// A float's payload has no shortest-form integer encoding
+	if major == MajorSimple && info >= infoUint16 {
+		return 0, 0, ErrUnsupportedType
+	}
 	// Ensure it was canonical in the first place
 	var canonical bool
 	switch {
@@ -629,7 +657,11 @@ func mapKeyCmp(a, b int64) int {
 // Raw is a placeholder type to allow only partially parsing CBOR objects when
 // some part might depend on another (e.g. version tag, method in an RPC, etc).
 //
-// Encoding copies the bytes verbatim, without checking that they contain even
+// Marshal treats a nil Raw as an absent slice. It returns ErrUnexpectedNil
+// for a required value, encodes null in an optional array field, and omits
+// an optional map field.
+//
+// Encoding a non-nil Raw copies its bytes without checking that they contain even
 // one valid CBOR item. Decoding traverses one item's structure and checks its
 // headers, lengths, supported types, and nesting depth, but does not validate
 // text as UTF-8 or check map key types, order, or duplicates. Use Verify on the
@@ -745,16 +777,15 @@ func verifyObject(dec *Decoder, depth int) error {
 		return nil
 
 	case MajorMap:
-		var prevKey *int64
+		var prevVal int64
+		var prev *int64
 		for range value {
-			key, err := dec.DecodeInt()
+			key, err := dec.DecodeMapKey(prev)
 			if err != nil {
 				return err
 			}
-			if prevKey != nil && mapKeyCmp(*prevKey, key) >= 0 {
-				return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, key, *prevKey)
-			}
-			prevKey = &key
+			prevVal = key
+			prev = &prevVal
 			if err := verifyObject(dec, depth-1); err != nil {
 				return err
 			}

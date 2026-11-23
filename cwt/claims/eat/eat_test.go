@@ -14,6 +14,22 @@ import (
 	"github.com/dark-bio/crypto-go/cbor"
 )
 
+// TestMarshalInvalidEnums checks the wire ranges for debug state and intended use.
+func TestMarshalInvalidEnums(t *testing.T) {
+	for _, tt := range []struct {
+		claim any
+		err   error
+	}{
+		{DebugStatus{DebugStatus: 5}, ErrInvalidDebugState},
+		{IntendedUse{IntendedUse: 0}, ErrInvalidUse},
+		{IntendedUse{IntendedUse: 6}, ErrInvalidUse},
+	} {
+		if _, err := cbor.Marshal(tt.claim); !errors.Is(err, tt.err) {
+			t.Errorf("%+v: got %v, want %v", tt.claim, err, tt.err)
+		}
+	}
+}
+
 // TestOEMIDRandom verifies round-trip encoding of a random OEM ID.
 func TestOEMIDRandom(t *testing.T) {
 	id := [16]byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}

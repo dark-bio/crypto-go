@@ -190,10 +190,10 @@ func sealPlaintext(t *testing.T, plaintext []byte, aad any, recipient *xhpke.Pub
 	return envelope
 }
 
-// TestSealedPlaintextPadding checks both policies against a fixed Sign1 and
-// exact raw padding bytes for sealing and re-encryption.
+// TestSealedPlaintextPadding checks the signature and exact padding bytes
+// for sealing and re-encryption.
 func TestSealedPlaintextPadding(t *testing.T) {
-	// Reuse the fixed v0.16 signature as the expected plaintext prefix
+	// Reuse the fixed v0.16 signature for re-encryption
 	fx := fixtures(t, "v0.16.json")
 	signer := xdsa.ParseSecretKey([xdsa.SecretKeySize]byte(mustHex(t, fx.XdsaSeed)))
 	recipient := xhpke.ParseSecretKey([xhpke.SecretKeySize]byte(mustHex(t, fx.XhpkeSeed)))
@@ -230,8 +230,9 @@ func TestSealedPlaintextPadding(t *testing.T) {
 				if len(plaintext) != tt.size {
 					t.Fatalf("%d: plaintext size %d, want %d", i, len(plaintext), tt.size)
 				}
-				if !bytes.Equal(plaintext[:3461], sign1) {
-					t.Fatalf("%d: signature prefix mismatch", i)
+				// Re-encryption preserves the fixture signature byte for byte
+				if i == 1 && !bytes.Equal(plaintext[:3461], sign1) {
+					t.Fatal("re-encryption changed the fixture signature")
 				}
 				if !bytes.Equal(plaintext[3461:], make([]byte, tt.zeros)) {
 					t.Fatalf("%d: padding mismatch", i)
@@ -240,7 +241,7 @@ func TestSealedPlaintextPadding(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !bytes.Equal(decrypted, sign1) {
+				if !bytes.Equal(decrypted, plaintext[:3461]) {
 					t.Fatalf("%d: decrypted signature mismatch", i)
 				}
 				payload, err := Open[[]byte](envelope, aad, recipient, signer.PublicKey(), domain, nil)

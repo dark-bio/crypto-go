@@ -231,3 +231,17 @@ func TestJSON(t *testing.T) {
 		t.Fatalf("null into a pointer = %v, %v, want nil, nil", key, err)
 	}
 }
+
+// TestPublicKeyDEROwnership checks that a parsed key survives reuse of the DER buffer.
+func TestPublicKeyDEROwnership(t *testing.T) {
+	public := GenerateKey().PublicKey()
+	der := public.MarshalDER()
+	parsed, err := ParsePublicKeyDER(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clear(der)
+	if parsed.Marshal() != public.Marshal() {
+		t.Fatal("parsed key changed when DER was cleared")
+	}
+}

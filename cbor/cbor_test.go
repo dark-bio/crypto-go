@@ -753,6 +753,26 @@ func TestRawEncoding(t *testing.T) {
 	}
 }
 
+// TestNilRawEncoding checks how an absent raw item encodes in each field mode.
+func TestNilRawEncoding(t *testing.T) {
+	if _, err := Marshal(Raw(nil)); !errors.Is(err, ErrUnexpectedNil) {
+		t.Errorf("Marshal(Raw(nil)): got %v, want ErrUnexpectedNil", err)
+	}
+	type tuple struct {
+		_    struct{} `cbor:"_,array"`
+		Item Raw      `cbor:"_,optional"`
+	}
+	if got, err := Marshal(tuple{}); err != nil || !bytes.Equal(got, []byte{0x81, 0xf6}) {
+		t.Errorf("optional array field: got %x, %v, want 81f6", got, err)
+	}
+	type record struct {
+		Item Raw `cbor:"1,key,optional"`
+	}
+	if got, err := Marshal(record{}); err != nil || !bytes.Equal(got, []byte{0xa0}) {
+		t.Errorf("optional map field: got %x, %v, want a0", got, err)
+	}
+}
+
 // Tests that Raw captures and defers decoding correctly.
 func TestRawDecoding(t *testing.T) {
 	// Unsigned integer (42)
@@ -936,6 +956,12 @@ func TestVerify(t *testing.T) {
 		data []byte
 	}{
 		{"undefined", []byte{0xf7}},
+		{"float16 zero", []byte{0xf9, 0, 0}},
+		{"float32 zero", []byte{0xfa, 0, 0, 0, 0}},
+		{"float64 zero", []byte{0xfb, 0, 0, 0, 0, 0, 0, 0, 0}},
+		{"float16 subnormal", []byte{0xf9, 0, 1}},
+		{"float32 subnormal", []byte{0xfa, 0, 0, 0, 1}},
+		{"float64 subnormal", []byte{0xfb, 0, 0, 0, 0, 0, 0, 0, 1}},
 		{"float16", []byte{0xf9, 0x3c, 0x00}},
 		{"float32", []byte{0xfa, 0x3f, 0x80, 0x00, 0x00}},
 		{"float64", []byte{0xfb, 0x3f, 0xf0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}},
@@ -970,15 +996,164 @@ func TestVerify(t *testing.T) {
 	}
 
 	// Incomplete data
-	incomplete := []byte{0x61} // text string header without data
-	if err := Verify(incomplete); !errors.Is(err, ErrUnexpectedEOF) {
-		t.Errorf("Verify incomplete: expected ErrUnexpectedEOF, got %v", err)
+	for _, wire := range [][]byte{{0x61}, {0xf9}, {0xfa, 0}, {0xfb, 0}} {
+		if err := Verify(wire); !errors.Is(err, ErrUnexpectedEOF) {
+			t.Errorf("Verify(%x): expected ErrUnexpectedEOF, got %v", wire, err)
+		}
 	}
 
 	// Invalid additional info
-	invalidInfo := []byte{0x1c} // UINT with additional info 28 (reserved)
-	if err := Verify(invalidInfo); !errors.Is(err, ErrInvalidAdditionalInfo) {
-		t.Errorf("Verify invalid info: expected ErrInvalidAdditionalInfo, got %v", err)
+	for _, b := range []byte{0x1c, 0xfc, 0xfd, 0xfe, 0xff} {
+		if err := Verify([]byte{b}); !errors.Is(err, ErrInvalidAdditionalInfo) {
+			t.Errorf("Verify(%x): expected ErrInvalidAdditionalInfo, got %v", b, err)
+		}
+	}
+}
+
+// TestUnmarshalNull checks explicit Null values and optional Null pointers.
+func TestUnmarshalNull(t *testing.T) {
+	if err := Unmarshal([]byte{0xf6}, new(Null)); err != nil {
+		t.Fatal(err)
+	}
+	type tuple struct {
+		_    struct{} `cbor:"_,array"`
+		Item *Null    `cbor:"_,optional"`
+	}
+	dst := tuple{Item: new(Null)}
+	if err := Unmarshal([]byte{0x81, 0xf6}, &dst); err != nil || dst.Item != nil {
+		t.Errorf("optional array field: got %v, %v, want nil", dst.Item, err)
+	}
+}
+
+// TestSimpleTypeErrors distinguishes an unexpected simple value from a wrong major type.
+func TestSimpleTypeErrors(t *testing.T) {
+	for _, tt := range []struct {
+		wire    byte
+		boolErr error
+		nullErr error
+	}{
+		{0x00, ErrInvalidMajorType, ErrInvalidMajorType},
+		{0xf4, nil, ErrUnsupportedType},
+		{0xf5, nil, ErrUnsupportedType},
+		{0xf6, ErrUnsupportedType, nil},
+		{0xf7, ErrUnsupportedType, ErrUnsupportedType},
+		{0xfb, ErrUnsupportedType, ErrUnsupportedType},
+	} {
+		if _, err := NewDecoder([]byte{tt.wire}).DecodeBool(); !errors.Is(err, tt.boolErr) {
+			t.Errorf("DecodeBool(%x): got %v, want %v", tt.wire, err, tt.boolErr)
+		}
+		if err := NewDecoder([]byte{tt.wire}).DecodeNull(); !errors.Is(err, tt.nullErr) {
+			t.Errorf("DecodeNull(%x): got %v, want %v", tt.wire, err, tt.nullErr)
+		}
+	}
+}
+
+// TestVerifyDuplicateKey distinguishes repeated map keys from unordered ones.
+func TestVerifyDuplicateKey(t *testing.T) {
+	for _, tt := range []struct {
+		wire []byte
+		err  error
+	}{
+		{[]byte{0xa2, 1, 0, 1, 0}, ErrDuplicateMapKey},
+		{[]byte{0xa2, 2, 0, 1, 0}, ErrInvalidMapKeyOrder},
+	} {
+		if err := Verify(tt.wire); !errors.Is(err, tt.err) {
+			t.Errorf("%x: got %v, want %v", tt.wire, err, tt.err)
+		}
+	}
+}
+
+// TestNarrowIntegerOverflow checks the limits of signed and unsigned destinations.
+func TestNarrowIntegerOverflow(t *testing.T) {
+	for _, tt := range []struct {
+		wire   []byte
+		target any
+	}{
+		{[]byte{0x19, 1, 0}, new(uint8)},
+		{[]byte{0x1a, 0, 1, 0, 0}, new(uint16)},
+		{[]byte{0x1b, 0, 0, 0, 1, 0, 0, 0, 0}, new(uint32)},
+		{[]byte{0x18, 0x80}, new(int8)},
+		{[]byte{0x38, 0x80}, new(int8)},
+		{[]byte{0x19, 0x80, 0}, new(int16)},
+		{[]byte{0x3a, 0x80, 0, 0, 0}, new(int32)},
+	} {
+		if err := Unmarshal(tt.wire, tt.target); !errors.Is(err, ErrIntegerOverflow) {
+			t.Errorf("%x into %T: %v", tt.wire, tt.target, err)
+		}
+	}
+}
+
+// TestInvalidArguments checks nil encode values and invalid decode targets.
+func TestInvalidArguments(t *testing.T) {
+	for _, v := range []any{nil, (*uint64)(nil), (*customValue)(nil)} {
+		if _, err := Marshal(v); !errors.Is(err, ErrUnexpectedNil) {
+			t.Errorf("Marshal(%T): %v", v, err)
+		}
+		if err := NewEncoder().Encode(v); !errors.Is(err, ErrUnexpectedNil) {
+			t.Errorf("Encode(%T): %v", v, err)
+		}
+	}
+	for _, tt := range []struct {
+		target any
+		err    error
+	}{
+		{nil, ErrUnexpectedNil},
+		{(*uint64)(nil), ErrUnexpectedNil},
+		{uint64(0), ErrUnsupportedType},
+	} {
+		if err := Unmarshal([]byte{0}, tt.target); !errors.Is(err, tt.err) {
+			t.Errorf("Unmarshal(%T): %v", tt.target, err)
+		}
+		if err := NewDecoder([]byte{0}).Decode(tt.target); !errors.Is(err, tt.err) {
+			t.Errorf("Decode(%T): %v", tt.target, err)
+		}
+	}
+}
+
+// TestOptionLookalike checks that a struct with Value and Some keeps its own wire format.
+func TestOptionLookalike(t *testing.T) {
+	// record uses the same fields as Option with its own map encoding.
+	type record struct {
+		Value int  `cbor:"1,key"`
+		Some  bool `cbor:"2,key"`
+	}
+	value := record{Value: 7}
+	wire := []byte{0xa2, 1, 7, 2, 0xf4}
+	encoded, err := Marshal(value)
+	if err != nil || !bytes.Equal(encoded, wire) {
+		t.Fatalf("Marshal: got %x, %v", encoded, err)
+	}
+	var decoded record
+	if err := Unmarshal(wire, &decoded); err != nil || decoded != value {
+		t.Fatalf("Unmarshal: got %+v, %v", decoded, err)
+	}
+}
+
+// TestInvalidMapKeyTag checks that the diagnostic identifies the field and invalid tag.
+func TestInvalidMapKeyTag(t *testing.T) {
+	_, err := Marshal(struct {
+		Value int `cbor:"bad,key"`
+	}{})
+	if !errors.Is(err, ErrUnsupportedType) || !strings.Contains(err.Error(), `field Value has invalid key "bad"`) {
+		t.Fatalf("invalid map key: %v", err)
+	}
+}
+
+// TestSliceAllocation checks that an array header cannot reserve all its elements up front.
+func TestSliceAllocation(t *testing.T) {
+	// Only one 1 KiB element fits the input budget for the declared 1024 elements
+	wire := append([]byte{0x99, 4, 0}, make([]byte, 1024)...)
+	var dst [][1024]byte
+	if err := Unmarshal(wire, &dst); !errors.Is(err, ErrInvalidMajorType) {
+		t.Fatal(err)
+	}
+	if cap(dst) > 1 {
+		t.Fatalf("reserved %d elements", cap(dst))
+	}
+	// Zero-sized elements still consume at least one wire byte per item
+	var units []Unit
+	if err := Unmarshal([]byte{0x82, 0x80, 0x80}, &units); err != nil || len(units) != 2 {
+		t.Fatalf("empty arrays: got %v, %v", units, err)
 	}
 }
 
@@ -2254,24 +2429,14 @@ func TestEncodeDecodeRaw(t *testing.T) {
 	}
 }
 
-// Tests that deeply nested CBOR structures are rejected with an error instead
-// of causing a stack overflow, but nesting up to the maximum depth is still
-// accepted.
+// TestMaxNestingDepth checks the 32-level nesting limit.
 func TestMaxNestingDepth(t *testing.T) {
-	atLimit := make([]byte, maxDepth)
-	for i := range atLimit {
-		atLimit[i] = 0x81
-	}
-	atLimit[maxDepth-1] = 0x00
+	atLimit := append(bytes.Repeat([]byte{0x81}, 31), 0)
 	if err := Verify(atLimit); err != nil {
 		t.Fatalf("Verify at max depth should succeed: %v", err)
 	}
 
-	overLimit := make([]byte, maxDepth+2)
-	for i := range overLimit {
-		overLimit[i] = 0x81
-	}
-	overLimit[maxDepth+1] = 0x00
+	overLimit := append([]byte{0x81}, atLimit...)
 	if err := Verify(overLimit); !errors.Is(err, ErrMaxDepthExceeded) {
 		t.Fatalf("Verify over max depth should fail with ErrMaxDepthExceeded, got: %v", err)
 	}

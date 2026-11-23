@@ -127,6 +127,16 @@ func TestSecretKeyBytesMalformed(t *testing.T) {
 	}
 }
 
+// TestSecretKeyEvenModulus checks the modulus before private key validation.
+func TestSecretKeyEvenModulus(t *testing.T) {
+	raw := GenerateKey().Marshal()
+	raw[127] &^= 1 // clear the low bit of p
+	_, err := ParseSecretKey(raw)
+	if !errors.Is(err, ErrMalformedKey) || !strings.HasSuffix(err.Error(), "modulus must be odd") {
+		t.Fatalf("even modulus: %v", err)
+	}
+}
+
 // Tests that a raw byte encoded RSA public key can be decoded and re-encoded
 // to the same bytes. The purpose is not to battle-test the implementation,
 // rather to ensure that the code implements the format other subsystems expect.

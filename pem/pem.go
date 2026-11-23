@@ -16,7 +16,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"unicode/utf8"
+	"strings"
 )
 
 var (
@@ -37,7 +37,7 @@ var (
 	// ErrEmptyBlockType is returned when the header names no block type.
 	ErrEmptyBlockType = errors.New("pem: empty PEM block type")
 
-	// ErrMalformedBlockType is returned when the block type is not valid UTF-8.
+	// ErrMalformedBlockType is returned for invalid label characters or spacing.
 	ErrMalformedBlockType = errors.New("pem: malformed PEM block type")
 
 	// ErrMissingFooter is returned when no "-----END TYPE-----" footer matches
@@ -49,7 +49,7 @@ var (
 	ErrTrailingData = errors.New("pem: trailing data after PEM block")
 
 	// ErrMalformedBody is returned when the body between header and footer is
-	// empty, holds only line endings, or does not end in a line ending. The
+	// empty, contains a blank line, or does not end in a line ending. The
 	// wrapping error says which.
 	ErrMalformedBody = errors.New("pem: malformed PEM body")
 
@@ -59,13 +59,30 @@ var (
 	ErrMalformedPayload = errors.New("pem: malformed base64 payload")
 )
 
+// validLabel reports whether kind contains printable ASCII words without
+// hyphens, separated by single spaces.
+func validLabel(kind string) bool {
+	for word := range strings.SplitSeq(kind, " ") {
+		if word == "" {
+			return false
+		}
+		for i := range len(word) {
+			if b := word[i]; b < 0x21 || b > 0x7e || b == '-' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // Decode decodes a single PEM block with strict validation.
 //
 // Rules:
 //   - Header must start at byte 0 (no leading whitespace)
+//   - Label uses printable ASCII other than hyphens, with single spaces between words
 //   - Footer must end the data (only optional line ending after)
 //   - Line endings must be consistent (\n or \r\n throughout)
-//   - Base64 lines contain only base64 characters
+//   - Base64 lines are non-empty and contain only base64 characters
 //   - Strict base64 decoding (no padding errors, etc.)
 //   - Payload must not be empty
 //   - No trailing data after the PEM block
@@ -99,7 +116,7 @@ func Decode(data []byte) (kind string, blob []byte, err error) {
 	if len(blockType) == 0 {
 		return "", nil, ErrEmptyBlockType
 	}
-	if !utf8.ValidString(blockType) {
+	if !validLabel(blockType) {
 		return "", nil, ErrMalformedBlockType
 	}
 	// Build expected footer
@@ -123,37 +140,38 @@ func Decode(data []byte) (kind string, blob []byte, err error) {
 	// Extract body (between header and footer)
 	body := data[headerEnd+1 : footerStart]
 
-	// Body must end with the line ending (the line before footer)
 	if len(body) == 0 {
 		return "", nil, fmt.Errorf("%w: empty body", ErrMalformedBody)
 	}
 	if !bytes.HasSuffix(body, lineEnding) {
 		return "", nil, fmt.Errorf("%w: missing newline before footer", ErrMalformedBody)
 	}
-	body = body[:len(body)-len(lineEnding)]
-
-	// Strip line endings and ensure no whitespace remains
-	b64 := bytes.ReplaceAll(body, lineEnding, nil)
-	if bytes.ContainsAny(b64, "\r\n") {
-		return "", nil, fmt.Errorf("%w: stray line endings", ErrMalformedPayload)
+	// Check each line before passing the body to the newline-tolerant base64 decoder
+	for line := range bytes.SplitSeq(body[:len(body)-len(lineEnding)], lineEnding) {
+		if bytes.ContainsAny(line, "\r\n") {
+			return "", nil, fmt.Errorf("%w: stray line endings", ErrMalformedPayload)
+		}
+		if len(line) == 0 {
+			return "", nil, fmt.Errorf("%w: blank line", ErrMalformedBody)
+		}
 	}
-	// A body of blank lines holds no payload, rejected like a missing body
-	if len(b64) == 0 {
-		return "", nil, fmt.Errorf("%w: empty body", ErrMalformedBody)
-	}
-	decoded, err := base64.StdEncoding.Strict().DecodeString(string(b64))
+	decoded, err := base64.StdEncoding.Strict().AppendDecode(nil, body)
 	if err != nil {
+		clear(decoded)
 		return "", nil, fmt.Errorf("%w: %v", ErrMalformedPayload, err)
 	}
 	return blockType, decoded, nil
 }
 
 // Encode encodes data as a PEM block with the given type.
-// Lines are 64 characters, using \n line endings. It panics if blob is empty,
-// since Decode rejects an empty payload.
+// Lines are 64 characters, using \n line endings. It panics if blob is empty
+// or kind is an invalid block label.
 func Encode(kind string, blob []byte) []byte {
 	if len(blob) == 0 {
 		panic("pem: empty payload")
+	}
+	if !validLabel(kind) {
+		panic("pem: invalid block type")
 	}
 	b64 := base64.StdEncoding.EncodeToString(blob)
 
