@@ -71,6 +71,9 @@ var unitType = reflect.TypeOf(Unit{})
 // nullType is used for type comparison in reflection.
 var nullType = reflect.TypeOf(Null{})
 
+// rawType is used for type comparison in reflection.
+var rawType = reflect.TypeOf(Raw{})
+
 // optionPkgPath identifies the package that declares Option[T].
 var optionPkgPath = reflect.TypeFor[Option[int]]().PkgPath()
 
@@ -318,25 +321,26 @@ func (dec *Decoder) Decode(v any) error {
 // decodeValue recursively decodes CBOR into a reflect.Value.
 // The optional flag indicates whether null values are allowed (from struct tag).
 func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
-	// Handle pointer nullability before Unmarshaler so an optional pointer to
-	// a custom Unmarshaler decodes CBOR null as nil.
 	if v.Kind() == reflect.Ptr {
-		// Raw and Option handle null themselves
+		// An optional pointer decodes CBOR null as nil before invoking Unmarshaler
+		if optional && dec.PeekNull() {
+			v.SetZero()
+			return dec.DecodeNull()
+		}
 		elem := v.Type().Elem()
-		if dec.PeekNull() && elem != reflect.TypeOf(Raw{}) && !isOptionType(elem) {
-			if optional {
-				v.SetZero()
-				return dec.DecodeNull()
-			}
-			if elem != nullType {
+		if v.IsNil() {
+			// Reject null on a required nil pointer before allocating a target
+			if dec.PeekNull() && elem != rawType && !isOptionType(elem) && elem != nullType {
 				return ErrUnexpectedNull
 			}
-		}
-		if v.IsNil() {
 			v.Set(reflect.New(elem))
 		}
 		if u, ok := v.Interface().(Unmarshaler); ok {
 			return u.UnmarshalCBOR(dec)
+		}
+		// Raw, Option, and Null handle CBOR null themselves
+		if dec.PeekNull() && elem != rawType && !isOptionType(elem) && elem != nullType {
+			return ErrUnexpectedNull
 		}
 		v = v.Elem()
 		optional = false // inner value is no longer optional
@@ -841,60 +845,61 @@ func collectMapFields(t reflect.Type, prefix []int, gs *ptrGroupState, visited m
 			continue
 		}
 		if tag == "" {
-			// Anonymous embedded struct field without a cbor tag: recurse into it.
-			if f.Anonymous {
-				embedType, ok := embeddedStructType(f.Type)
-				if !ok {
-					continue
-				}
-				if visited[embedType] {
-					return nil, fmt.Errorf("%w: recursive embed %s", ErrUnsupportedType, embedType.Name())
-				}
-				isArray, err := wantArray(embedType)
-				if err != nil {
-					return nil, err
-				}
-				if isArray {
-					return nil, fmt.Errorf("%w: embedded field %s is array-mode", ErrUnsupportedType, f.Name)
-				}
-				visited[embedType] = true
-				inner := make([]int, len(prefix)+1)
-				copy(inner, prefix)
-				inner[len(prefix)] = i
-				prevID := gs.nextID
-				sub, err := collectMapFields(embedType, inner, gs, visited)
-				delete(visited, embedType)
-				if err != nil {
-					return nil, err
-				}
-				if len(sub) == 0 && len(structFields(embedType)) > 0 {
-					return nil, fmt.Errorf("%w: embedded field %s has no CBOR map keys", ErrUnsupportedType, f.Name)
-				}
-				// Pointer embeds (*T): nil pointer = all fields absent.
-				// Assign a group ID so decode can validate all-or-none.
-				// Only set the group on fields that don't already belong
-				// to a deeper (inner) pointer embed group. Inner groups
-				// created during the recursive call become children of
-				// this group in the hierarchy.
-				if f.Type.Kind() == reflect.Ptr {
-					gs.nextID++
-					group := gs.nextID
-					embedIdx := make([]int, len(inner))
-					copy(embedIdx, inner)
-					gs.embeds[group] = embedIdx
-					for childID := prevID + 1; childID < group; childID++ {
-						if _, ok := gs.parents[childID]; !ok {
-							gs.parents[childID] = group
-						}
-					}
-					for j := range sub {
-						if sub[j].ptrGroup == 0 {
-							sub[j].ptrGroup = group
-						}
-					}
-				}
-				fields = append(fields, sub...)
+			if !f.Anonymous {
+				return nil, fmt.Errorf("%w: field %s in map struct requires a cbor:\"N,key\" tag", ErrUnsupportedType, f.Name)
 			}
+			// Anonymous embedded struct field without a cbor tag: recurse into it.
+			embedType, ok := embeddedStructType(f.Type)
+			if !ok {
+				return nil, fmt.Errorf("%w: anonymous field %s is not a struct and requires a cbor:\"N,key\" tag", ErrUnsupportedType, f.Name)
+			}
+			if visited[embedType] {
+				return nil, fmt.Errorf("%w: recursive embed %s", ErrUnsupportedType, embedType.Name())
+			}
+			isArray, err := wantArray(embedType)
+			if err != nil {
+				return nil, err
+			}
+			if isArray {
+				return nil, fmt.Errorf("%w: embedded field %s is array-mode", ErrUnsupportedType, f.Name)
+			}
+			visited[embedType] = true
+			inner := make([]int, len(prefix)+1)
+			copy(inner, prefix)
+			inner[len(prefix)] = i
+			prevID := gs.nextID
+			sub, err := collectMapFields(embedType, inner, gs, visited)
+			delete(visited, embedType)
+			if err != nil {
+				return nil, err
+			}
+			if len(sub) == 0 && len(structFields(embedType)) > 0 {
+				return nil, fmt.Errorf("%w: embedded field %s has no CBOR map keys", ErrUnsupportedType, f.Name)
+			}
+			// Pointer embeds (*T): nil pointer = all fields absent.
+			// Assign a group ID so decode can validate all-or-none.
+			// Only set the group on fields that don't already belong
+			// to a deeper (inner) pointer embed group. Inner groups
+			// created during the recursive call become children of
+			// this group in the hierarchy.
+			if f.Type.Kind() == reflect.Ptr {
+				gs.nextID++
+				group := gs.nextID
+				embedIdx := make([]int, len(inner))
+				copy(embedIdx, inner)
+				gs.embeds[group] = embedIdx
+				for childID := prevID + 1; childID < group; childID++ {
+					if _, ok := gs.parents[childID]; !ok {
+						gs.parents[childID] = group
+					}
+				}
+				for j := range sub {
+					if sub[j].ptrGroup == 0 {
+						sub[j].ptrGroup = group
+					}
+				}
+			}
+			fields = append(fields, sub...)
 			continue
 		}
 		st, err := parseTag(tag)

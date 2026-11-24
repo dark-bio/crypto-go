@@ -220,7 +220,9 @@ type MapEntry struct {
 	// Key is the integer map key.
 	Key int64
 
-	// Value slices the raw encoded CBOR item in the decoder's input buffer.
+	// Value slices the raw encoded CBOR item in the decoder's input buffer
+	// with capacity capped to the item length. Mutating its elements modifies
+	// the underlying input buffer.
 	Value Raw
 }
 
@@ -511,7 +513,7 @@ func (d *Decoder) DecodeMapEntries() ([]MapEntry, error) {
 		if err := skipObject(d, maxDepth); err != nil {
 			return nil, err
 		}
-		entries = append(entries, MapEntry{Key: key, Value: Raw(d.data[start:d.pos])})
+		entries = append(entries, MapEntry{Key: key, Value: Raw(d.data[start:d.pos:d.pos])})
 	}
 	return entries, nil
 }

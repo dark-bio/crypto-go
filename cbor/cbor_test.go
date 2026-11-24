@@ -1129,9 +1129,26 @@ func TestOptionLookalike(t *testing.T) {
 	}
 }
 
+// nullableValue is a custom Unmarshaler that accepts CBOR null.
+type nullableValue struct {
+	wasNull bool
+}
+
+// UnmarshalCBOR records whether the next item is CBOR null.
+func (n *nullableValue) UnmarshalCBOR(dec *Decoder) error {
+	if dec.PeekNull() {
+		n.wasNull = true
+		return dec.DecodeNull()
+	}
+	n.wasNull = false
+	_, err := dec.DecodeUint()
+	return err
+}
+
 // TestOptionalUnmarshaler checks that an optional pointer to a custom
-// Unmarshaler encodes and decodes CBOR null as nil, while a required pointer
-// rejects null without allocating.
+// Unmarshaler encodes and decodes CBOR null as nil, a required pointer field
+// rejects null without allocating, and a top-level custom Unmarshaler still
+// receives CBOR null.
 func TestOptionalUnmarshaler(t *testing.T) {
 	type optionalTuple struct {
 		_   struct{}     `cbor:"_,array"`
@@ -1163,6 +1180,12 @@ func TestOptionalUnmarshaler(t *testing.T) {
 	if err := Unmarshal([]byte{0x81, 0xf6}, &req); !errors.Is(err, ErrUnexpectedNull) || req.Val != nil {
 		t.Fatalf("Unmarshal(required null): got %+v, %v", req.Val, err)
 	}
+
+	// Top-level destination implementing Unmarshaler receives CBOR null directly
+	var top nullableValue
+	if err := Unmarshal([]byte{0xf6}, &top); err != nil || !top.wasNull {
+		t.Fatalf("Unmarshal(top-level null): got %+v, %v", top, err)
+	}
 }
 
 // TestDecodeMapEntries checks deterministic map entry decoding and error cases.
@@ -1175,6 +1198,11 @@ func TestDecodeMapEntries(t *testing.T) {
 	if len(entries) != 2 || entries[0].Key != 1 || !bytes.Equal(entries[0].Value, []byte{0x0a}) ||
 		entries[1].Key != -1 || !bytes.Equal(entries[1].Value, []byte{0x61, 'a'}) {
 		t.Fatalf("entries: %+v", entries)
+	}
+	for i, e := range entries {
+		if cap(e.Value) != len(e.Value) {
+			t.Errorf("entry %d cap=%d, want %d", i, cap(e.Value), len(e.Value))
+		}
 	}
 
 	// Duplicate key surfaces both ErrDuplicateMapKey and the repeated key
@@ -1238,13 +1266,34 @@ func TestInvalidStructTags(t *testing.T) {
 			[]byte{0xa1, 1, 0},
 		},
 		{
+			"map invalid key",
+			func() any {
+				return &struct {
+					A uint64 `cbor:"1,key"`
+					V uint64 `cbor:"bad,key"`
+				}{}
+			},
+			[]byte{0xa1, 1, 0},
+		},
+		{
 			"map tag without key",
 			func() any {
 				return &struct {
-					V *uint64 `cbor:"1,optional"`
+					A uint64  `cbor:"1,key"`
+					V *uint64 `cbor:"2,optional"`
 				}{}
 			},
-			[]byte{0xa0},
+			[]byte{0xa1, 1, 0},
+		},
+		{
+			"map untagged exported field",
+			func() any {
+				return &struct {
+					A uint64 `cbor:"1,key"`
+					B uint64
+				}{}
+			},
+			[]byte{0xa1, 1, 0},
 		},
 		{
 			"map tag on unexported field",
