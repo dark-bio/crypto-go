@@ -1181,6 +1181,16 @@ func TestOptionalUnmarshaler(t *testing.T) {
 		t.Fatalf("Unmarshal(required null): got %+v, %v", req.Val, err)
 	}
 
+	// Required pointer field rejects null regardless of prior destination state
+	type requiredNullable struct {
+		Val *nullableValue `cbor:"1,key"`
+	}
+	for _, dst := range []*requiredNullable{{}, {Val: &nullableValue{}}} {
+		if err := Unmarshal([]byte{0xa1, 1, 0xf6}, dst); !errors.Is(err, ErrUnexpectedNull) {
+			t.Fatalf("Unmarshal(required nullable ptr): got %v, want ErrUnexpectedNull", err)
+		}
+	}
+
 	// Top-level destination implementing Unmarshaler receives CBOR null directly
 	var top nullableValue
 	if err := Unmarshal([]byte{0xf6}, &top); err != nil || !top.wasNull {

@@ -80,8 +80,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"unicode/utf8"
-	"unsafe"
 )
 
 // CBOR major types.
@@ -478,6 +478,10 @@ func (d *Decoder) DecodeMapHeader() (uint64, error) {
 	return length, nil
 }
 
+// mapEntrySize is the in-memory size of one MapEntry, used to bound upfront
+// slice allocation in DecodeMapEntries.
+var mapEntrySize = int(reflect.TypeFor[MapEntry]().Size())
+
 // DecodeMapEntries decodes a CBOR map with integer keys in deterministic
 // order, returning each key paired with a slice of its raw encoded value in
 // the decoder's input buffer.
@@ -491,7 +495,7 @@ func (d *Decoder) DecodeMapEntries() ([]MapEntry, error) {
 	}
 	// Cap upfront capacity by remaining wire bytes to prevent memory amplification
 	remaining := len(d.data) - d.pos
-	safeCap := remaining/int(unsafe.Sizeof(MapEntry{})) + 16
+	safeCap := remaining/mapEntrySize + 16
 	entries := make([]MapEntry, 0, min(int(length), safeCap))
 
 	var prev int64

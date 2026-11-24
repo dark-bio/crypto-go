@@ -315,7 +315,7 @@ func (dec *Decoder) Decode(v any) error {
 	if target.IsNil() {
 		return ErrUnexpectedNil
 	}
-	return decodeValue(dec, target, false)
+	return decodeValue(dec, target.Elem(), false)
 }
 
 // decodeValue recursively decodes CBOR into a reflect.Value.
@@ -328,19 +328,15 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 			return dec.DecodeNull()
 		}
 		elem := v.Type().Elem()
+		// Raw, Option, and Null handle CBOR null themselves
+		if dec.PeekNull() && elem != rawType && !isOptionType(elem) && elem != nullType {
+			return ErrUnexpectedNull
+		}
 		if v.IsNil() {
-			// Reject null on a required nil pointer before allocating a target
-			if dec.PeekNull() && elem != rawType && !isOptionType(elem) && elem != nullType {
-				return ErrUnexpectedNull
-			}
 			v.Set(reflect.New(elem))
 		}
 		if u, ok := v.Interface().(Unmarshaler); ok {
 			return u.UnmarshalCBOR(dec)
-		}
-		// Raw, Option, and Null handle CBOR null themselves
-		if dec.PeekNull() && elem != rawType && !isOptionType(elem) && elem != nullType {
-			return ErrUnexpectedNull
 		}
 		v = v.Elem()
 		optional = false // inner value is no longer optional
