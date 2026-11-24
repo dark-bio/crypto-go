@@ -130,35 +130,15 @@ func Peek[T any](data []byte) (*T, error) {
 
 // validateClaims checks the claims map and enforces its time bounds when now is set.
 func validateClaims(raw cbor.Raw, now *uint64) error {
-	// Read the outer map first to distinguish duplicate temporal claims
+	// Parse the outer map first so duplicate temporal claims surface as ErrDuplicateKey
 	dec := cbor.NewDecoder(raw)
-	n, err := dec.DecodeMapHeader()
+	entries, err := dec.DecodeMapEntries()
 	if err != nil {
+		var dup *cbor.DuplicateMapKeyError
+		if errors.As(err, &dup) && (dup.Key == 4 || dup.Key == 5) {
+			return fmt.Errorf("%w: %d", ErrDuplicateKey, dup.Key)
+		}
 		return err
-	}
-	var prevVal int64
-	var prev *int64
-	var nbf, exp cbor.Raw
-	for range n {
-		key, err := dec.DecodeMapKey(prev)
-		if err != nil {
-			if errors.Is(err, cbor.ErrDuplicateMapKey) && (*prev == 4 || *prev == 5) {
-				return fmt.Errorf("%w: %d", ErrDuplicateKey, *prev)
-			}
-			return err
-		}
-		prevVal = key
-		prev = &prevVal
-		value, err := dec.DecodeRaw()
-		if err != nil {
-			return err
-		}
-		switch key {
-		case 4:
-			exp = value
-		case 5:
-			nbf = value
-		}
 	}
 	if err := dec.Finish(); err != nil {
 		return err
@@ -170,26 +150,32 @@ func validateClaims(raw cbor.Raw, now *uint64) error {
 	if now == nil {
 		return nil
 	}
-	// Decode the time bounds only when the caller requests a time check
-	var expires uint64
-	if exp != nil {
-		expires, err = cbor.NewDecoder(exp).DecodeUint()
-		if err != nil {
-			return err
+	// Decode and enforce time bounds when the caller supplies a reference clock
+	var nbf, exp *uint64
+	for _, entry := range entries {
+		switch entry.Key {
+		case 4:
+			val, err := cbor.NewDecoder(entry.Value).DecodeUint()
+			if err != nil {
+				return err
+			}
+			exp = &val
+		case 5:
+			val, err := cbor.NewDecoder(entry.Value).DecodeUint()
+			if err != nil {
+				return err
+			}
+			nbf = &val
 		}
 	}
 	if nbf == nil {
 		return ErrMissingNbf
 	}
-	starts, err := cbor.NewDecoder(nbf).DecodeUint()
-	if err != nil {
-		return err
+	if *now < *nbf {
+		return fmt.Errorf("%w: nbf %d > now %d", ErrNotYetValid, *nbf, *now)
 	}
-	if *now < starts {
-		return fmt.Errorf("%w: nbf %d > now %d", ErrNotYetValid, starts, *now)
-	}
-	if exp != nil && *now >= expires {
-		return fmt.Errorf("%w: exp %d <= now %d", ErrAlreadyExpired, expires, *now)
+	if exp != nil && *now >= *exp {
+		return fmt.Errorf("%w: exp %d <= now %d", ErrAlreadyExpired, *exp, *now)
 	}
 	return nil
 }

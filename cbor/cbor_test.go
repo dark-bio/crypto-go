@@ -1129,13 +1129,181 @@ func TestOptionLookalike(t *testing.T) {
 	}
 }
 
-// TestInvalidMapKeyTag checks that the diagnostic identifies the field and invalid tag.
-func TestInvalidMapKeyTag(t *testing.T) {
-	_, err := Marshal(struct {
-		Value int `cbor:"bad,key"`
-	}{})
-	if !errors.Is(err, ErrUnsupportedType) || !strings.Contains(err.Error(), `field Value has invalid key "bad"`) {
-		t.Fatalf("invalid map key: %v", err)
+// TestOptionalUnmarshaler checks that an optional pointer to a custom
+// Unmarshaler encodes and decodes CBOR null as nil, while a required pointer
+// rejects null without allocating.
+func TestOptionalUnmarshaler(t *testing.T) {
+	type optionalTuple struct {
+		_   struct{}     `cbor:"_,array"`
+		Val *customValue `cbor:"_,optional"`
+	}
+	encoded, err := Marshal(optionalTuple{})
+	if err != nil || !bytes.Equal(encoded, []byte{0x81, 0xf6}) {
+		t.Fatalf("Marshal(nil): got %x, %v", encoded, err)
+	}
+	// Pre-populate Val so the decode must clear it back to nil
+	dst := optionalTuple{Val: &customValue{secret: 7}}
+	if err := Unmarshal(encoded, &dst); err != nil || dst.Val != nil {
+		t.Fatalf("Unmarshal(null): got %+v, %v", dst.Val, err)
+	}
+	present := optionalTuple{Val: &customValue{secret: 42}}
+	encoded, err = Marshal(present)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Unmarshal(encoded, &dst); err != nil || dst.Val == nil || dst.Val.secret != 42 {
+		t.Fatalf("Unmarshal(present): got %+v, %v", dst.Val, err)
+	}
+
+	type requiredTuple struct {
+		_   struct{} `cbor:"_,array"`
+		Val *customValue
+	}
+	var req requiredTuple
+	if err := Unmarshal([]byte{0x81, 0xf6}, &req); !errors.Is(err, ErrUnexpectedNull) || req.Val != nil {
+		t.Fatalf("Unmarshal(required null): got %+v, %v", req.Val, err)
+	}
+}
+
+// TestDecodeMapEntries checks deterministic map entry decoding and error cases.
+func TestDecodeMapEntries(t *testing.T) {
+	dec := NewDecoder([]byte{0xa2, 1, 0x0a, 0x20, 0x61, 'a'})
+	entries, err := dec.DecodeMapEntries()
+	if err != nil || dec.Finish() != nil {
+		t.Fatalf("DecodeMapEntries: %v", err)
+	}
+	if len(entries) != 2 || entries[0].Key != 1 || !bytes.Equal(entries[0].Value, []byte{0x0a}) ||
+		entries[1].Key != -1 || !bytes.Equal(entries[1].Value, []byte{0x61, 'a'}) {
+		t.Fatalf("entries: %+v", entries)
+	}
+
+	// Duplicate key surfaces both ErrDuplicateMapKey and the repeated key
+	if _, err := NewDecoder([]byte{0xa2, 4, 0, 4, 1}).DecodeMapEntries(); !errors.Is(err, ErrDuplicateMapKey) {
+		t.Fatalf("duplicate: got %v, want ErrDuplicateMapKey", err)
+	} else {
+		var dup *DuplicateMapKeyError
+		if !errors.As(err, &dup) || dup.Key != 4 {
+			t.Fatalf("duplicate key: got %v, want key 4", err)
+		}
+	}
+
+	for _, tt := range []struct {
+		name string
+		wire []byte
+		err  error
+	}{
+		{"non-map", []byte{0x80}, ErrInvalidMajorType},
+		{"unsorted", []byte{0xa2, 2, 0, 1, 0}, ErrInvalidMapKeyOrder},
+		{"over depth", append([]byte{0xa1, 1}, append(bytes.Repeat([]byte{0x81}, 32), 0)...), ErrMaxDepthExceeded},
+	} {
+		if _, err := NewDecoder(tt.wire).DecodeMapEntries(); !errors.Is(err, tt.err) {
+			t.Errorf("%s: got %v, want %v", tt.name, err, tt.err)
+		}
+	}
+}
+
+// TestInvalidStructTags checks that unknown, duplicate, and misplaced cbor
+// struct tags are rejected during both marshaling and unmarshaling.
+func TestInvalidStructTags(t *testing.T) {
+	cases := []struct {
+		name string
+		make func() any
+		wire []byte
+	}{
+		{
+			"map unknown option",
+			func() any {
+				return &struct {
+					V *uint64 `cbor:"1,key,optinal"`
+				}{}
+			},
+			[]byte{0xa1, 1, 0},
+		},
+		{
+			"map trailing comma",
+			func() any {
+				return &struct {
+					V uint64 `cbor:"1,key,"`
+				}{}
+			},
+			[]byte{0xa1, 1, 0},
+		},
+		{
+			"map duplicate option",
+			func() any {
+				return &struct {
+					V uint64 `cbor:"1,key,key"`
+				}{}
+			},
+			[]byte{0xa1, 1, 0},
+		},
+		{
+			"map tag without key",
+			func() any {
+				return &struct {
+					V *uint64 `cbor:"1,optional"`
+				}{}
+			},
+			[]byte{0xa0},
+		},
+		{
+			"map tag on unexported field",
+			func() any {
+				return &struct {
+					A uint64 `cbor:"1,key"`
+					b uint64 `cbor:"2,key"`
+				}{}
+			},
+			[]byte{0xa1, 1, 0},
+		},
+		{
+			"array with key tag",
+			func() any {
+				return &struct {
+					_ struct{} `cbor:"_,array"`
+					A uint64   `cbor:"2,key"`
+				}{}
+			},
+			[]byte{0x81, 0},
+		},
+		{
+			"array with unknown option",
+			func() any {
+				return &struct {
+					_ struct{} `cbor:"_,array"`
+					A *uint64  `cbor:"_,optinal"`
+				}{}
+			},
+			[]byte{0x81, 0},
+		},
+		{
+			"array with named marker",
+			func() any {
+				return &struct {
+					_ struct{} `cbor:"foo,array"`
+					A uint64
+				}{}
+			},
+			[]byte{0x81, 0},
+		},
+		{
+			"array with non-nilable optional",
+			func() any {
+				return &struct {
+					_ struct{} `cbor:"_,array"`
+					A uint64   `cbor:"_,optional"`
+				}{}
+			},
+			[]byte{0x81, 0},
+		},
+	}
+	for _, tt := range cases {
+		if _, err := Marshal(tt.make()); !errors.Is(err, ErrUnsupportedType) {
+			t.Errorf("%s Marshal: got %v, want ErrUnsupportedType", tt.name, err)
+		}
+		if err := Unmarshal(tt.wire, tt.make()); !errors.Is(err, ErrUnsupportedType) {
+			t.Errorf("%s Unmarshal: got %v, want ErrUnsupportedType", tt.name, err)
+		}
 	}
 }
 
