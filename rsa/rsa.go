@@ -72,8 +72,7 @@ var (
 
 // SecretKey contains a 2048-bit RSA private key usable for signing with SHA-256.
 type SecretKey struct {
-	// inner is the underlying standard library RSA private key.
-	inner *rsa.PrivateKey
+	inner *rsa.PrivateKey // underlying standard library RSA private key
 }
 
 // GenerateKey creates a new, random private key.
@@ -274,8 +273,7 @@ func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 // error. To detect a missing key, decode into a *PublicKey field and check it
 // for nil.
 type PublicKey struct {
-	// inner is the underlying standard library RSA public key.
-	inner *rsa.PublicKey
+	inner *rsa.PublicKey // underlying standard library RSA public key
 }
 
 // ParsePublicKey parses a 264-byte array into a public key.

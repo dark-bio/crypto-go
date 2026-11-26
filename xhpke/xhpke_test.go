@@ -104,12 +104,9 @@ func TestPublicKeyPEMRoundtrip(t *testing.T) {
 // ietfVectors holds test vectors from draft-connolly-cfrg-xwing-kem Appendix D.
 // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem
 var ietfVectors = struct {
-	// SecretKeySeed is the hex-encoded 32-byte seed.
-	SecretKeySeed string
-	// SecretKeyPEM is the PKCS#8 v1 PEM encoding.
-	SecretKeyPEM string
-	// PublicKeyPEM is the SPKI PEM encoding.
-	PublicKeyPEM string
+	SecretKeySeed string // hex-encoded 32-byte seed
+	SecretKeyPEM  string // PKCS#8 v1 PEM
+	PublicKeyPEM  string // SPKI PEM
 }{
 	SecretKeySeed: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
 	SecretKeyPEM: `-----BEGIN PRIVATE KEY-----

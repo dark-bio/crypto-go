@@ -23,16 +23,11 @@ import (
 // ietfVectors holds test vectors from draft-ietf-lamps-pq-composite-sigs Appendix E.
 // https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs
 var ietfVectors = struct {
-	// SecretKey is the hex-encoded 64-byte seed.
-	SecretKey string
-	// SecretKeyDER is the hex-encoded PKCS#8 DER key.
-	SecretKeyDER string
-	// PublicKey is the hex-encoded 1984-byte public key.
-	PublicKey string
-	// Message is the test message string.
-	Message string
-	// Signature is the hex-encoded 3373-byte signature.
-	Signature string
+	SecretKey    string // hex-encoded 64-byte seed
+	SecretKeyDER string // hex-encoded PKCS#8 DER key
+	PublicKey    string // hex-encoded 1984-byte public key
+	Message      string // test message
+	Signature    string // hex-encoded 3373-byte signature
 }{
 	SecretKey: "" +
 		"d79b8541af185b7bb61ea99c302df11d2b760cb8aa1d0628be8882a82d87" +

@@ -25,12 +25,9 @@ var ErrInvalidBitString = errors.New("asn1ext: invalid public key bit string")
 
 // PKCS8PrivateKey is the ASN.1 structure for PKCS#8 private keys.
 type PKCS8PrivateKey struct {
-	// Version is the PKCS#8 structure version (must be 0).
-	Version int
-	// Algorithm identifies the key algorithm and optional parameters.
-	Algorithm pkix.AlgorithmIdentifier
-	// PrivateKey holds the raw algorithm-specific private key bytes.
-	PrivateKey []byte
+	Version    int                      // PKCS#8 structure version (must be 0)
+	Algorithm  pkix.AlgorithmIdentifier // key algorithm and optional parameters
+	PrivateKey []byte                   // raw algorithm-specific private key bytes
 }
 
 // ParsePKCS8PrivateKey parses a DER-encoded PKCS#8 private key using strict
@@ -90,10 +87,8 @@ func ParsePKCS8PrivateKey(der []byte) (*PKCS8PrivateKey, error) {
 
 // SubjectPublicKeyInfo is the ASN.1 structure for SPKI public keys.
 type SubjectPublicKeyInfo struct {
-	// Algorithm identifies the key algorithm and optional parameters.
-	Algorithm pkix.AlgorithmIdentifier
-	// SubjectPublicKey holds the public key BIT STRING.
-	SubjectPublicKey asn1.BitString
+	Algorithm        pkix.AlgorithmIdentifier // key algorithm and optional parameters
+	SubjectPublicKey asn1.BitString           // public key BIT STRING
 }
 
 // ParseSubjectPublicKeyInfo parses a DER-encoded SPKI public key using strict

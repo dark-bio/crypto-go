@@ -725,14 +725,10 @@ func structFields(t reflect.Type) []reflect.StructField {
 
 // structTag holds the parsed components of a cbor struct tag.
 type structTag struct {
-	// name is the leading tag name or integer key string.
-	name string
-	// array reports whether the array option is set.
-	array bool
-	// key reports whether the key option is set.
-	key bool
-	// optional reports whether the optional option is set.
-	optional bool
+	name     string // leading tag name or integer key string
+	array    bool   // whether the array option is set
+	key      bool   // whether the key option is set
+	optional bool   // whether the optional option is set
 }
 
 // parseTag parses and validates a cbor struct tag, rejecting unknown,
@@ -793,26 +789,19 @@ func wantArray(t reflect.Type) (bool, error) {
 
 // fieldInfo holds a struct field and its integer map key.
 type fieldInfo struct {
-	// field is the reflected struct field with its full index path.
-	field reflect.StructField
-	// key is the CBOR integer map key.
-	key int64
-	// optional reports whether the field is omitted when nil or absent.
-	optional bool
-	// ptrGroup identifies the enclosing pointer embed group, or 0 for direct fields.
-	ptrGroup int
+	field    reflect.StructField // reflected struct field with full index path
+	key      int64               // CBOR integer map key
+	optional bool                // omitted when nil or absent
+	ptrGroup int                 // enclosing pointer embed group, or 0 for direct fields
 }
 
 // ptrGroupState tracks pointer embed group IDs and their parent hierarchy
 // during field collection. When *A contains *B, B's group is a child of A's
 // group.
 type ptrGroupState struct {
-	// nextID is the counter for allocating pointer embed group IDs.
-	nextID int
-	// parents maps each child group ID to its parent group ID.
-	parents map[int]int
-	// embeds maps each group ID to the field index path of its embed pointer.
-	embeds map[int][]int
+	nextID  int           // counter for allocating pointer embed group IDs
+	parents map[int]int   // child group ID to parent group ID
+	embeds  map[int][]int // group ID to field index path of its embed pointer
 }
 
 // mapFields extracts fields with cbor:"N,key" tags from a struct type,
@@ -983,10 +972,8 @@ func isOptionalCapable(t reflect.Type) bool {
 
 // arrayFieldInfo holds a struct field and optional flag for array encoding.
 type arrayFieldInfo struct {
-	// field is the reflected struct field.
-	field reflect.StructField
-	// optional reports whether nil values encode as CBOR null.
-	optional bool
+	field    reflect.StructField // reflected struct field
+	optional bool                // whether nil values encode as CBOR null
 }
 
 // arrayFields extracts fields from an array struct with their optional flags,

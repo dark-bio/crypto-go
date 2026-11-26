@@ -79,10 +79,8 @@ var (
 
 // SecretKey contains an ML-DSA-65 private key for creating digital signatures.
 type SecretKey struct {
-	// key is the underlying expanded ML-DSA-65 private key.
-	key *mldsa65.PrivateKey
-	// seed is the 32-byte key generation seed.
-	seed [mldsa65.SeedSize]byte
+	key  *mldsa65.PrivateKey    // expanded ML-DSA-65 private key
+	seed [mldsa65.SeedSize]byte // 32-byte key generation seed
 }
 
 // GenerateKey creates a new, random private key.
@@ -268,8 +266,7 @@ func (k *SecretKey) Sign(message []byte, ctx []byte) (*Signature, error) {
 // error. To detect a missing key, decode into a *PublicKey field and check it
 // for nil.
 type PublicKey struct {
-	// key is the underlying ML-DSA-65 public key.
-	key *mldsa65.PublicKey
+	key *mldsa65.PublicKey // underlying ML-DSA-65 public key
 }
 
 // ParsePublicKey converts a 1952-byte array into a public key.

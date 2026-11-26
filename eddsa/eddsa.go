@@ -76,8 +76,7 @@ var (
 
 // SecretKey contains an Ed25519 private key usable for signing.
 type SecretKey struct {
-	// key is the underlying standard library Ed25519 private key.
-	key ed25519.PrivateKey
+	key ed25519.PrivateKey // underlying standard library Ed25519 private key
 }
 
 // GenerateKey creates a new, random private key.
@@ -201,8 +200,7 @@ func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 // missing from the input keeps the zero value without error. To detect a
 // missing key, decode into a *PublicKey field and check it for nil.
 type PublicKey struct {
-	// key is the underlying standard library Ed25519 public key.
-	key ed25519.PublicKey
+	key ed25519.PublicKey // underlying standard library Ed25519 public key
 }
 
 // ParsePublicKey converts a 32-byte array into a public key.

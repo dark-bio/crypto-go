@@ -28,7 +28,6 @@ func (v *SWVersion) Version() string {
 // swVersionValue encodes as a 1-element CBOR array per RFC 9711
 // Section 4.2.7: [version: tstr]. The optional scheme is not supported.
 type swVersionValue struct {
-	_ struct{} `cbor:"_,array"`
-	// Version is the software revision string.
-	Version string
+	_       struct{} `cbor:"_,array"`
+	Version string   // software revision string
 }

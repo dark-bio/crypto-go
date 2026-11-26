@@ -89,10 +89,8 @@ var OID = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 6, 48}
 // SecretKey contains a composite ML-DSA-65 + Ed25519 private key for creating
 // quantum-resistant digital signatures.
 type SecretKey struct {
-	// mlKey is the ML-DSA-65 signing component.
-	mlKey *mldsa.SecretKey
-	// edKey is the Ed25519 signing component.
-	edKey *eddsa.SecretKey
+	mlKey *mldsa.SecretKey // ML-DSA-65 signing component
+	edKey *eddsa.SecretKey // Ed25519 signing component
 }
 
 // GenerateKey creates a new, random private key.
@@ -300,10 +298,8 @@ func SplitSign(mlKey mldsa.Signer, edKey eddsa.Signer, message []byte) (*Signatu
 // error. To detect a missing key, decode into a *PublicKey field and check it
 // for nil.
 type PublicKey struct {
-	// mlKey is the ML-DSA-65 verification component.
-	mlKey *mldsa.PublicKey
-	// edKey is the Ed25519 verification component.
-	edKey *eddsa.PublicKey
+	mlKey *mldsa.PublicKey // ML-DSA-65 verification component
+	edKey *eddsa.PublicKey // Ed25519 verification component
 }
 
 // ComposePublicKey creates a public key from its constituent ML-DSA-65 and

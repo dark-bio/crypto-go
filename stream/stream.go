@@ -30,8 +30,7 @@ type PayloadKey [PayloadKeySize]byte
 
 // Writer encrypts the plaintext written to it into the underlying writer.
 type Writer struct {
-	// stream is the underlying STREAM encrypting writer.
-	stream *inner.EncryptWriter
+	stream *inner.EncryptWriter // underlying STREAM encrypting writer
 }
 
 // Encrypt wraps STREAM encryption under the given key around a writer.
@@ -56,8 +55,7 @@ func (w *Writer) Close() error {
 
 // Reader decrypts the stream read from the underlying reader.
 type Reader struct {
-	// stream is the underlying STREAM decrypting reader.
-	stream *inner.DecryptReader
+	stream *inner.DecryptReader // underlying STREAM decrypting reader
 }
 
 // Decrypt wraps STREAM decryption under the given key around a reader.
@@ -78,10 +76,8 @@ func (r *Reader) Read(p []byte) (int, error) {
 // ReaderAt decrypts arbitrary plaintext ranges of a stream held in random
 // access storage.
 type ReaderAt struct {
-	// stream is the underlying random-access STREAM decrypting reader.
-	stream *inner.DecryptReaderAt
-	// size is the total decrypted plaintext size in bytes.
-	size int64
+	stream *inner.DecryptReaderAt // underlying random-access STREAM decrypting reader
+	size   int64                  // total decrypted plaintext size in bytes
 }
 
 // DecryptAt wraps STREAM decryption under the given key around random access

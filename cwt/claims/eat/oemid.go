@@ -74,25 +74,18 @@ func (o *OEMID) PEN() (uint64, bool) {
 type oemidKind uint8
 
 const (
-	// oemidRandom identifies a 16-byte random manufacturer ID.
-	oemidRandom oemidKind = 1
-	// oemidIEEE identifies a 3-byte IEEE OUI/MA-L.
-	oemidIEEE oemidKind = 2
-	// oemidPEN identifies an IANA Private Enterprise Number.
-	oemidPEN oemidKind = 3
+	oemidRandom oemidKind = 1 // 16-byte random manufacturer ID
+	oemidIEEE   oemidKind = 2 // 3-byte IEEE OUI/MA-L
+	oemidPEN    oemidKind = 3 // IANA Private Enterprise Number
 )
 
 // oemidValue holds an OEM ID in one of three formats with custom CBOR
 // encoding per RFC 9711 Section 4.2.3.
 type oemidValue struct {
-	// kind selects which OEM ID representation is populated.
-	kind oemidKind
-	// random holds the 16-byte random OEM ID when kind is oemidRandom.
-	random [16]byte
-	// ieee holds the 3-byte IEEE OUI/MA-L when kind is oemidIEEE.
-	ieee [3]byte
-	// pen holds the IANA Private Enterprise Number when kind is oemidPEN.
-	pen uint64
+	kind   oemidKind // active representation
+	random [16]byte  // 16-byte random OEM ID
+	ieee   [3]byte   // 3-byte IEEE OUI/MA-L
+	pen    uint64    // IANA Private Enterprise Number
 }
 
 // MarshalCBOR implements cbor.Marshaler.

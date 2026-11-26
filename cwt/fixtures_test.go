@@ -27,18 +27,12 @@ type noExpCert struct {
 
 // fixtureCorpus is the v0.16 fixture corpus pinning the CWT wire format.
 type fixtureCorpus struct {
-	// XdsaSeed is the hex-encoded signing key seed.
-	XdsaSeed string `json:"xdsa_seed"`
-	// Domain is the hex-encoded application domain.
-	Domain string `json:"domain"`
-	// Now is the Unix reference timestamp in seconds.
-	Now uint64 `json:"now"`
-	// Valid is the hex-encoded valid token fixture.
-	Valid string `json:"valid"`
-	// Expired is the hex-encoded expired token fixture.
-	Expired string `json:"expired"`
-	// Premature is the hex-encoded not-yet-valid token fixture.
-	Premature string `json:"premature"`
+	XdsaSeed  string `json:"xdsa_seed"` // hex-encoded signing key seed
+	Domain    string `json:"domain"`    // hex-encoded application domain
+	Now       uint64 `json:"now"`       // Unix reference timestamp in seconds
+	Valid     string `json:"valid"`     // hex-encoded valid token fixture
+	Expired   string `json:"expired"`   // hex-encoded expired token fixture
+	Premature string `json:"premature"` // hex-encoded not-yet-valid token fixture
 }
 
 // fixtures loads the v0.16 fixture corpus.

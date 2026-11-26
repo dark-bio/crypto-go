@@ -97,10 +97,8 @@ var (
 
 // SecretKey contains an X-Wing private key for decrypting HPKE messages.
 type SecretKey struct {
-	// inner is the underlying standard library HPKE private key.
-	inner hpke.PrivateKey
-	// seed is the 32-byte key generation seed.
-	seed [SecretKeySize]byte
+	inner hpke.PrivateKey     // underlying standard library HPKE private key
+	seed  [SecretKeySize]byte // 32-byte key generation seed
 }
 
 // GenerateKey creates a new, random private key.
@@ -293,8 +291,7 @@ func (k *SecretKey) NewReceiver(sessionKey *[EncapKeySize]byte, domain []byte) (
 // error. To detect a missing key, decode into a *PublicKey field and check it
 // for nil.
 type PublicKey struct {
-	// inner is the underlying standard library HPKE public key.
-	inner hpke.PublicKey
+	inner hpke.PublicKey // underlying standard library HPKE public key
 }
 
 // ParsePublicKey converts a 1216-byte array into a public key.
@@ -559,8 +556,7 @@ func (k *PublicKey) NewSender(domain []byte) (*Sender, [EncapKeySize]byte, error
 // Messages must be provided in the same order they were sealed by the
 // corresponding Sender.
 type Receiver struct {
-	// inner is the underlying standard library HPKE recipient context.
-	inner *hpke.Recipient
+	inner *hpke.Recipient // underlying standard library HPKE recipient context
 }
 
 // Open decrypts a message using the next nonce in the sequence.
@@ -579,8 +575,7 @@ func (c *Receiver) Open(msgToOpen, msgToAuth []byte) ([]byte, error) {
 // The corresponding Receiver must process messages in the same order they
 // were sealed.
 type Sender struct {
-	// inner is the underlying standard library HPKE sender context.
-	inner *hpke.Sender
+	inner *hpke.Sender // underlying standard library HPKE sender context
 }
 
 // Seal encrypts a message using the next nonce in the sequence.

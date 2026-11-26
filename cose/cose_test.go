@@ -19,18 +19,15 @@ import (
 
 // testPayload is a sample CBOR array payload used in COSE tests.
 type testPayload struct {
-	_ struct{} `cbor:"_,array"`
-	// Num is a numeric test field.
-	Num uint64
-	// Str is a string test field.
-	Str string
+	_   struct{} `cbor:"_,array"`
+	Num uint64   // numeric test field
+	Str string   // string test field
 }
 
 // testAAD is a sample CBOR array authenticated data payload used in COSE tests.
 type testAAD struct {
-	_ struct{} `cbor:"_,array"`
-	// Str is a string test field.
-	Str string
+	_   struct{} `cbor:"_,array"`
+	Str string   // string test field
 }
 
 // TestSignVerify checks embedded signing and verification across valid and

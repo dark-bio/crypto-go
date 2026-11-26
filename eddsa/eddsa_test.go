@@ -23,14 +23,10 @@ import (
 // ietfVectors holds test vectors from RFC 8410 Sections 10.1 and 10.3.
 // https://datatracker.ietf.org/doc/html/rfc8410
 var ietfVectors = struct {
-	// SecretKeySeed is the hex-encoded 32-byte seed.
-	SecretKeySeed string
-	// SecretKeyPEM is the PKCS#8 v1 PEM encoding.
-	SecretKeyPEM string
-	// SecretKeyV2PEM is the PKCS#8 v2 PEM encoding with an attribute and public key.
-	SecretKeyV2PEM string
-	// PublicKeyPEM is the SPKI PEM encoding.
-	PublicKeyPEM string
+	SecretKeySeed  string // hex-encoded 32-byte seed
+	SecretKeyPEM   string // PKCS#8 v1 PEM
+	SecretKeyV2PEM string // PKCS#8 v2 PEM with attribute and embedded public key
+	PublicKeyPEM   string // SPKI PEM
 }{
 	SecretKeySeed: "d4ee72dbf913584ad5b6d8f1f769f8ad3afe7c28cbf1d4fbe097a88f44755842",
 	SecretKeyPEM: `-----BEGIN PRIVATE KEY-----

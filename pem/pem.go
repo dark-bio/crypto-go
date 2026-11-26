@@ -20,14 +20,9 @@ import (
 )
 
 var (
-	// pemHeader is the prefix that opens a PEM header line.
-	pemHeader = []byte("-----BEGIN ")
-
-	// pemFooter is the prefix that opens a PEM footer line.
-	pemFooter = []byte("-----END ")
-
-	// pemEnding is the suffix that closes a PEM header or footer line.
-	pemEnding = []byte("-----")
+	pemHeader = []byte("-----BEGIN ") // opens a PEM header line
+	pemFooter = []byte("-----END ")   // opens a PEM footer line
+	pemEnding = []byte("-----")       // closes a PEM header or footer line
 )
 
 var (

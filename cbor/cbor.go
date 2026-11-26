@@ -111,24 +111,17 @@ const (
 
 // Additional info values for multi-byte integers and lengths.
 const (
-	// infoUint8 indicates an 8-bit unsigned integer follows.
-	infoUint8 = 24
-	// infoUint16 indicates a 16-bit big-endian unsigned integer follows.
-	infoUint16 = 25
-	// infoUint32 indicates a 32-bit big-endian unsigned integer follows.
-	infoUint32 = 26
-	// infoUint64 indicates a 64-bit big-endian unsigned integer follows.
-	infoUint64 = 27
+	infoUint8  = 24 // 8-bit unsigned integer follows
+	infoUint16 = 25 // 16-bit big-endian unsigned integer follows
+	infoUint32 = 26 // 32-bit big-endian unsigned integer follows
+	infoUint64 = 27 // 64-bit big-endian unsigned integer follows
 )
 
 // Simple values under major type 7.
 const (
-	// simpleFalse is the CBOR simple value for false.
-	simpleFalse = 20
-	// simpleTrue is the CBOR simple value for true.
-	simpleTrue = 21
-	// simpleNull is the CBOR simple value for null.
-	simpleNull = 22
+	simpleFalse = 20 // boolean false
+	simpleTrue  = 21 // boolean true
+	simpleNull  = 22 // null
 )
 
 // maxInt is the maximum value of int, used for overflow checks.
@@ -235,8 +228,7 @@ type MapEntry struct {
 
 // Encoder is the low-level CBOR encoder supporting the restricted type subset.
 type Encoder struct {
-	// buf holds the accumulated encoded CBOR bytes.
-	buf []byte
+	buf []byte // accumulated encoded CBOR bytes
 }
 
 // NewEncoder creates a CBOR encoder with a 1 KiB pre-allocated buffer.
@@ -331,10 +323,8 @@ func (e *Encoder) encodeLength(majorType uint8, length uint64) {
 
 // Decoder is the low-level CBOR decoder supporting the restricted type subset.
 type Decoder struct {
-	// data is the input buffer being decoded.
-	data []byte
-	// pos is the current read offset within data.
-	pos int
+	data []byte // input buffer being decoded
+	pos  int    // current read offset within data
 }
 
 // NewDecoder creates a decoder around a data blob.
