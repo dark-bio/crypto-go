@@ -20,14 +20,19 @@ import (
 	"github.com/dark-bio/crypto-go/mldsa"
 )
 
-// Test vectors from draft-ietf-lamps-pq-composite-sigs-latest Appendix E
+// ietfVectors holds test vectors from draft-ietf-lamps-pq-composite-sigs Appendix E.
 // https://datatracker.ietf.org/doc/html/draft-ietf-lamps-pq-composite-sigs
 var ietfVectors = struct {
-	SecretKey    string // 64-byte seed hex
-	SecretKeyDER string // PKCS#8 DER hex
-	PublicKey    string // 1984-byte public key hex
-	Message      string // test message
-	Signature    string // 3373-byte signature hex
+	// SecretKey is the hex-encoded 64-byte seed.
+	SecretKey string
+	// SecretKeyDER is the hex-encoded PKCS#8 DER key.
+	SecretKeyDER string
+	// PublicKey is the hex-encoded 1984-byte public key.
+	PublicKey string
+	// Message is the test message string.
+	Message string
+	// Signature is the hex-encoded 3373-byte signature.
+	Signature string
 }{
 	SecretKey: "" +
 		"d79b8541af185b7bb61ea99c302df11d2b760cb8aa1d0628be8882a82d87" +
@@ -222,7 +227,8 @@ var ietfVectors = struct {
 		"1c11ef8c1bbec178a532505506",
 }
 
-// Tests operations with IETF test vectors.
+// TestIETFVectors checks composite signing and verification against the IETF
+// draft test vectors.
 func TestIETFVectors(t *testing.T) {
 	seedBytes, _ := hex.DecodeString(ietfVectors.SecretKey)
 	var seed [SecretKeySize]byte
@@ -248,8 +254,10 @@ func TestIETFVectors(t *testing.T) {
 	}
 }
 
+// TestPKCS8Encoding checks PKCS#8 DER parsing and encoding against the IETF
+// vector.
 func TestPKCS8Encoding(t *testing.T) {
-	// Parse the secret key from seed and from PKCS8
+	// Parse the secret key from seed and from PKCS#8
 	seedBytes, _ := hex.DecodeString(ietfVectors.SecretKey)
 	var seed [SecretKeySize]byte
 	copy(seed[:], seedBytes)
@@ -270,27 +278,24 @@ func TestPKCS8Encoding(t *testing.T) {
 	if !bytes.Equal(encodedDER, pkcs8Bytes) {
 		t.Fatal("re-encoded DER does not match")
 	}
-	// Round-trip: decode and re-encode
+	// Round-trip through DER decode and encode
 	roundtrip, _ := ParseSecretKeyDER(encodedDER)
 	if !bytes.Equal(roundtrip.MarshalDER(), encodedDER) {
 		t.Fatal("roundtrip failed")
 	}
 }
 
-// TestPublicKeyDERNonZeroUnusedBits verifies that ParsePublicKeyDER rejects
-// DER-encoded public keys where the BIT STRING has non-zero unused bits.
-// This is a regression test for a fuzz finding where Go was more lenient
-// than Rust in accepting malformed BIT STRINGs.
+// TestPublicKeyDERNonZeroUnusedBits checks that ParsePublicKeyDER rejects
+// DER-encoded public keys whose BIT STRING has nonzero unused bits.
 func TestPublicKeyDERNonZeroUnusedBits(t *testing.T) {
-	// This DER has a valid structure and correct OID, but the BIT STRING
-	// has unused_bits=3 (byte 0x03 at position 20) instead of 0.
-	// Go's encoding/asn1 silently accepts this, but it's malformed DER.
+	// Valid DER structure and OID, except the BIT STRING sets unused_bits=3 at
+	// byte 20 instead of 0
 	malformedDER, _ := hex.DecodeString(
 		"308207d1" + // SEQUENCE, length 2001
 			"300a" + // SEQUENCE (AlgorithmIdentifier), length 10
 			"06082b0601050507063003" + // OID 1.3.6.1.5.5.7.6.48, NULL
 			"8207c1" + // BIT STRING, length 1985
-			"03" + // unused_bits = 3 (WRONG: should be 0x00)
+			"03" + // unused_bits = 3 (must be 0x00)
 			"e8ead780af27b7f974532cd85bf3f86010b571826c9faba88183ae27b974" +
 			"6309269d3593c7001a3755b41d3eb42b7aeb172cb37bfd219c87f23fd7eb" +
 			"adeeda7a60239ac9064c28cb80f3cd95081a9a029e8e88b36231930178" +
@@ -367,6 +372,7 @@ func TestPublicKeyDERNonZeroUnusedBits(t *testing.T) {
 	}
 }
 
+// TestSecretKeyComposeSplit checks composing and splitting a secret key.
 func TestSecretKeyComposeSplit(t *testing.T) {
 	mlKey := mldsa.GenerateKey()
 	edKey := eddsa.GenerateKey()
@@ -385,6 +391,7 @@ func TestSecretKeyComposeSplit(t *testing.T) {
 	}
 }
 
+// TestPublicKeyComposeSplit checks composing and splitting a public key.
 func TestPublicKeyComposeSplit(t *testing.T) {
 	mlKey := mldsa.GenerateKey().PublicKey()
 	edKey := eddsa.GenerateKey().PublicKey()
@@ -403,6 +410,7 @@ func TestPublicKeyComposeSplit(t *testing.T) {
 	}
 }
 
+// TestSignatureComposeSplit checks composing and splitting a signature.
 func TestSignatureComposeSplit(t *testing.T) {
 	mlSec := mldsa.GenerateKey()
 	edSec := eddsa.GenerateKey()
@@ -452,8 +460,8 @@ func TestComposeSignVerify(t *testing.T) {
 	}
 }
 
-// Test that split signing with remote signers can be reassembled and verified
-// with a local public key.
+// TestSplitSignComposeVerify checks that split signing with separate signers
+// verifies against the composed public key.
 func TestSplitSignComposeVerify(t *testing.T) {
 	mlSec := mldsa.GenerateKey()
 	edSec := eddsa.GenerateKey()
@@ -473,8 +481,8 @@ func TestSplitSignComposeVerify(t *testing.T) {
 	}
 }
 
-// Tests that a public key whose algorithm identifier carries parameters is
-// rejected.
+// TestPublicKeyDERRejectsParams checks that a public key whose algorithm
+// identifier carries parameters is rejected.
 func TestPublicKeyDERRejectsParams(t *testing.T) {
 	// Rebuild a valid public key with injected NULL algorithm parameters
 	der := GenerateKey().PublicKey().MarshalDER()
@@ -496,8 +504,8 @@ func TestPublicKeyDERRejectsParams(t *testing.T) {
 	}
 }
 
-// Tests that a private key whose algorithm identifier carries parameters is
-// rejected.
+// TestSecretKeyDERRejectsParams checks that a private key whose algorithm
+// identifier carries parameters is rejected.
 func TestSecretKeyDERRejectsParams(t *testing.T) {
 	// Rebuild a valid private key with NULL algorithm parameters spliced in
 	der := GenerateKey().MarshalDER()
@@ -529,9 +537,9 @@ func TestSecretKeyDERRejectsParams(t *testing.T) {
 	}
 }
 
-// Tests that the text-encoded types marshal to the same JSON strings by value
-// and by pointer, round-trip through them, and reject null unless the target
-// is a pointer.
+// TestJSON checks that the text-encoded types marshal to the same JSON strings
+// by value and by pointer, round-trip cleanly, and reject null unless the
+// target is a pointer.
 func TestJSON(t *testing.T) {
 	secret := GenerateKey()
 	signature, err := secret.Sign([]byte("message"))

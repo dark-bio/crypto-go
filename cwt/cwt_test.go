@@ -35,9 +35,10 @@ type deviceCert struct {
 	eat.UEID
 }
 
+// ptr returns a pointer to v.
 func ptr(v uint64) *uint64 { return &v }
 
-// TestIssueVerify tests the happy path: issue a token and verify it.
+// TestIssueVerify checks issuing and verifying a token with standard and EAT claims.
 func TestIssueVerify(t *testing.T) {
 	issuer := xdsa.GenerateKey()
 	device := xdsa.GenerateKey()

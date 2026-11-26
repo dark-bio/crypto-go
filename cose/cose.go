@@ -136,30 +136,38 @@ var (
 
 // sigProtectedHeader is the protected header for COSE_Sign1.
 type sigProtectedHeader struct {
-	Algorithm int64            `cbor:"1,key"`
-	Crit      critHeader       `cbor:"2,key"`
-	Kid       xdsa.Fingerprint `cbor:"4,key"`
-	Timestamp int64            `cbor:"-70002,key"`
+	// Algorithm is the COSE algorithm identifier (label 1).
+	Algorithm int64 `cbor:"1,key"`
+	// Crit lists critical header labels that must be understood (label 2).
+	Crit critHeader `cbor:"2,key"`
+	// Kid is the signer's key fingerprint (label 4).
+	Kid xdsa.Fingerprint `cbor:"4,key"`
+	// Timestamp is the signature Unix timestamp in seconds (label -70002).
+	Timestamp int64 `cbor:"-70002,key"`
 }
 
 // critHeader lists the critical headers that must be understood.
 // Per RFC 9052, implementations must reject messages with unknown crit labels.
 type critHeader struct {
-	_         struct{} `cbor:"_,array"`
-	Timestamp int64    // HeaderTimestamp label
+	_ struct{} `cbor:"_,array"`
+	// Timestamp carries the HeaderTimestamp label.
+	Timestamp int64
 }
 
 // encProtectedHeader is the protected header for COSE_Encrypt0.
 type encProtectedHeader struct {
-	Algorithm int64             `cbor:"1,key"`
-	Kid       xhpke.Fingerprint `cbor:"4,key"`
+	// Algorithm is the COSE algorithm identifier (label 1).
+	Algorithm int64 `cbor:"1,key"`
+	// Kid is the recipient's key fingerprint (label 4).
+	Kid xhpke.Fingerprint `cbor:"4,key"`
 }
 
-// emptyHeader is an empty unprotected header map (for COSE_Sign1).
+// emptyHeader is an empty unprotected header map for COSE_Sign1.
 type emptyHeader struct{}
 
-// encapKeyHeader contains the encapsulated key (for COSE_Encrypt0).
+// encapKeyHeader contains the encapsulated key for COSE_Encrypt0.
 type encapKeyHeader struct {
+	// EncapKey holds the X-Wing encapsulated key (label -4).
 	EncapKey []byte `cbor:"-4,key"`
 }
 
@@ -172,11 +180,15 @@ type encapKeyHeader struct {
 //	    signature:   bstr
 //	]
 type coseSign1 struct {
-	_           struct{} `cbor:"_,array"`
-	Protected   []byte
+	_ struct{} `cbor:"_,array"`
+	// Protected holds the CBOR-encoded protected header bytes.
+	Protected []byte
+	// Unprotected holds the empty unprotected header map.
 	Unprotected emptyHeader
-	Payload     []byte `cbor:"_,optional"` // nil for detached payload (encodes as null per RFC 9052)
-	Signature   xdsa.Signature
+	// Payload holds the embedded payload bytes, or nil for a detached signature.
+	Payload []byte `cbor:"_,optional"`
+	// Signature holds the composite xDSA signature.
+	Signature xdsa.Signature
 }
 
 // clearPayload wipes the decoded payload, including one read before a decode error.
@@ -192,10 +204,13 @@ func (s *coseSign1) clearPayload() {
 //	    ciphertext:  bstr
 //	]
 type coseEncrypt0 struct {
-	_           struct{} `cbor:"_,array"`
-	Protected   []byte
+	_ struct{} `cbor:"_,array"`
+	// Protected holds the CBOR-encoded protected header bytes.
+	Protected []byte
+	// Unprotected carries the X-Wing encapsulated key header.
 	Unprotected encapKeyHeader
-	Ciphertext  []byte
+	// Ciphertext holds the HPKE-encrypted ciphertext bytes.
+	Ciphertext []byte
 }
 
 // sigStructure is the Sig_structure for computing signatures per RFC 9052 Section 4.4.
@@ -207,11 +222,15 @@ type coseEncrypt0 struct {
 //	    payload:        bstr
 //	]
 type sigStructure struct {
-	_           struct{} `cbor:"_,array"`
-	Context     string
-	Protected   []byte
+	_ struct{} `cbor:"_,array"`
+	// Context is the COSE signing context string ("Signature1").
+	Context string
+	// Protected holds the CBOR-encoded protected header bytes.
+	Protected []byte
+	// ExternalAAD holds the CBOR-encoded external AAD bytes.
 	ExternalAAD []byte
-	Payload     []byte
+	// Payload holds the payload bytes, or empty bytes for detached mode.
+	Payload []byte
 }
 
 // encStructure is the Enc_structure for computing AAD per RFC 9052 Section 5.3.
@@ -222,16 +241,21 @@ type sigStructure struct {
 //	    external_aad: bstr
 //	]
 type encStructure struct {
-	_           struct{} `cbor:"_,array"`
-	Context     string
-	Protected   []byte
+	_ struct{} `cbor:"_,array"`
+	// Context is the COSE encryption context string ("Encrypt0").
+	Context string
+	// Protected holds the CBOR-encoded protected header bytes.
+	Protected []byte
+	// ExternalAAD holds the CBOR-encoded external AAD bytes.
 	ExternalAAD []byte
 }
 
 // sigAAD wraps the domain info and message-to-auth for signing operations.
 type sigAAD struct {
-	_         struct{} `cbor:"_,array"`
-	Info      []byte
+	_ struct{} `cbor:"_,array"`
+	// Info holds DomainPrefix concatenated with the caller's domain.
+	Info []byte
+	// MsgToAuth holds the pre-encoded authenticated message bytes.
 	MsgToAuth cbor.Raw
 }
 

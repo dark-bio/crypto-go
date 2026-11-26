@@ -28,6 +28,7 @@ func (v *HWVersion) Version() string {
 // hwVersionValue encodes as a 1-element CBOR array per RFC 9711
 // Section 4.2.5: [version: tstr]. The optional scheme is not supported.
 type hwVersionValue struct {
-	_       struct{} `cbor:"_,array"`
+	_ struct{} `cbor:"_,array"`
+	// Version is the hardware revision string.
 	Version string
 }

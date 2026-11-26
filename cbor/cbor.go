@@ -109,19 +109,26 @@ const (
 	MajorSimple = 7
 )
 
-// Additional info values
+// Additional info values for multi-byte integers and lengths.
 const (
-	infoUint8  = 24
+	// infoUint8 indicates an 8-bit unsigned integer follows.
+	infoUint8 = 24
+	// infoUint16 indicates a 16-bit big-endian unsigned integer follows.
 	infoUint16 = 25
+	// infoUint32 indicates a 32-bit big-endian unsigned integer follows.
 	infoUint32 = 26
+	// infoUint64 indicates a 64-bit big-endian unsigned integer follows.
 	infoUint64 = 27
 )
 
-// Simple values (major type 7)
+// Simple values under major type 7.
 const (
+	// simpleFalse is the CBOR simple value for false.
 	simpleFalse = 20
-	simpleTrue  = 21
-	simpleNull  = 22
+	// simpleTrue is the CBOR simple value for true.
+	simpleTrue = 21
+	// simpleNull is the CBOR simple value for null.
+	simpleNull = 22
 )
 
 // maxInt is the maximum value of int, used for overflow checks.
@@ -226,14 +233,13 @@ type MapEntry struct {
 	Value Raw
 }
 
-// Encoder is the low-level implementation of the CBOR encoder with only the
-// handful of desired types supported.
+// Encoder is the low-level CBOR encoder supporting the restricted type subset.
 type Encoder struct {
+	// buf holds the accumulated encoded CBOR bytes.
 	buf []byte
 }
 
-// NewEncoder creates a CBOR encoder with an underlying buffer, pre-allocated
-// to 1KB (small enough not to be relevant, large enough to avoid tiny appends).
+// NewEncoder creates a CBOR encoder with a 1 KiB pre-allocated buffer.
 func NewEncoder() *Encoder {
 	return &Encoder{buf: make([]byte, 0, 1024)}
 }
@@ -323,11 +329,12 @@ func (e *Encoder) encodeLength(majorType uint8, length uint64) {
 	}
 }
 
-// Decoder is the low-level implementation of the CBOR decoder with only the
-// handful of desired types supported.
+// Decoder is the low-level CBOR decoder supporting the restricted type subset.
 type Decoder struct {
+	// data is the input buffer being decoded.
 	data []byte
-	pos  int
+	// pos is the current read offset within data.
+	pos int
 }
 
 // NewDecoder creates a decoder around a data blob.
@@ -675,22 +682,22 @@ func (d *Decoder) readBytes(n uint64) ([]byte, error) {
 	return bytes, nil
 }
 
-// mapKeyCmp compares two int64 keys according to CBOR deterministic encoding
-// order (RFC 8949 Section 4.2.1): bytewise lexicographic order of encoded keys.
+// mapKeyCmp compares two int64 keys in CBOR deterministic encoding order
+// (RFC 8949 Section 4.2.1), bytewise lexicographic order of encoded keys.
 //
-// For integers this means: non-negative integers (major type 0) come before
-// negative integers (major type 1). Within each sign, CBOR encodes the
-// magnitude in shortest form, so bytewise order equals numeric magnitude order.
+// Non-negative integers (major type 0) sort before negative integers (major
+// type 1). Within each sign, shortest-form CBOR encoding sorts by numeric
+// magnitude.
 func mapKeyCmp(a, b int64) int {
 	aNeg, bNeg := a < 0, b < 0
 	if aNeg != bNeg {
 		if aNeg {
-			return 1 // a negative, b non-negative → b first
+			return 1 // a negative, b non-negative, so b comes first
 		}
-		return -1 // a non-negative, b negative → a first
+		return -1 // a non-negative, b negative, so a comes first
 	}
 	if !aNeg {
-		// Both non-negative: CBOR encoding is monotonically increasing.
+		// Both non-negative, where CBOR encoding is monotonically increasing
 		if a < b {
 			return -1
 		}
@@ -699,7 +706,7 @@ func mapKeyCmp(a, b int64) int {
 		}
 		return 0
 	}
-	// Both negative: CBOR encodes -(n+1), so smaller magnitude sorts first.
+	// Both negative, where CBOR encodes -(n+1) so smaller magnitude sorts first
 	ua, ub := uint64(-(a + 1)), uint64(-(b + 1))
 	if ua < ub {
 		return -1

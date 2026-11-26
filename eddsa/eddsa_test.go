@@ -20,13 +20,17 @@ import (
 	"github.com/dark-bio/crypto-go/pem"
 )
 
-// Test vectors from RFC 8410 Sections 10.1 and 10.3
+// ietfVectors holds test vectors from RFC 8410 Sections 10.1 and 10.3.
 // https://datatracker.ietf.org/doc/html/rfc8410
 var ietfVectors = struct {
-	SecretKeySeed  string // 32-byte seed hex
-	SecretKeyPEM   string // PKCS#8 v1 PEM
-	SecretKeyV2PEM string // PKCS#8 v2 PEM with attribute and embedded public key
-	PublicKeyPEM   string // SPKI PEM
+	// SecretKeySeed is the hex-encoded 32-byte seed.
+	SecretKeySeed string
+	// SecretKeyPEM is the PKCS#8 v1 PEM encoding.
+	SecretKeyPEM string
+	// SecretKeyV2PEM is the PKCS#8 v2 PEM encoding with an attribute and public key.
+	SecretKeyV2PEM string
+	// PublicKeyPEM is the SPKI PEM encoding.
+	PublicKeyPEM string
 }{
 	SecretKeySeed: "d4ee72dbf913584ad5b6d8f1f769f8ad3afe7c28cbf1d4fbe097a88f44755842",
 	SecretKeyPEM: `-----BEGIN PRIVATE KEY-----
@@ -42,9 +46,9 @@ MCowBQYDK2VwAyEAGb9ECWmEzf6FQbrBZ9w7lshQhqowtrbLDFw4rXAxZuE=
 -----END PUBLIC KEY-----`,
 }
 
-// Tests operations with IETF test vectors: the private key must parse into
-// the published raw seed, re-encode into the published PEM and DER, and
-// derive the RFC's matching public key.
+// TestIETFVectors checks Ed25519 key parsing and encoding against RFC 8410
+// test vectors, verifying the raw seed, PEM and DER round-trips, and derived
+// public key.
 func TestIETFVectors(t *testing.T) {
 	// Round trip the secret key pem and verify the expected seed
 	key, err := ParseSecretKeyPEM(ietfVectors.SecretKeyPEM)
@@ -88,18 +92,16 @@ func TestIETFVectors(t *testing.T) {
 	}
 }
 
-// Tests that the RFC 8410 v2 private key vector carrying an attribute and an
-// embedded public key is rejected: only v1 keys without embedded public data
-// are supported.
+// TestIETFV2Rejected checks that the RFC 8410 v2 private key vector carrying
+// an attribute and an embedded public key is rejected, since only v1 keys
+// without embedded public data are supported.
 func TestIETFV2Rejected(t *testing.T) {
 	if _, err := ParseSecretKeyPEM(ietfVectors.SecretKeyV2PEM); err == nil {
 		t.Fatal("expected v2 private key with attributes to be rejected")
 	}
 }
 
-// Tests signing and verifying messages. Note, this test is not meant to test
-// cryptography, it is mostly an API sanity check to verify that everything
-// seems to work.
+// TestSignVerify checks basic signing and verification behavior.
 func TestSignVerify(t *testing.T) {
 	secret := GenerateKey()
 	public := secret.PublicKey()
@@ -116,8 +118,8 @@ func TestSignVerify(t *testing.T) {
 	}
 }
 
-// Tests that a public key whose algorithm identifier carries parameters is
-// rejected.
+// TestPublicKeyDERRejectsParams checks that a public key whose algorithm
+// identifier carries parameters is rejected.
 func TestPublicKeyDERRejectsParams(t *testing.T) {
 	// Rebuild a valid public key with injected NULL algorithm parameters
 	der := GenerateKey().PublicKey().MarshalDER()
@@ -139,8 +141,8 @@ func TestPublicKeyDERRejectsParams(t *testing.T) {
 	}
 }
 
-// Tests that a private key whose algorithm identifier carries parameters is
-// rejected.
+// TestSecretKeyDERRejectsParams checks that a private key whose algorithm
+// identifier carries parameters is rejected.
 func TestSecretKeyDERRejectsParams(t *testing.T) {
 	// Rebuild a valid private key with NULL algorithm parameters spliced in
 	der := GenerateKey().MarshalDER()
@@ -172,9 +174,9 @@ func TestSecretKeyDERRejectsParams(t *testing.T) {
 	}
 }
 
-// Tests that the text-encoded types marshal to the same JSON strings by value
-// and by pointer, round-trip through them, and reject null unless the target
-// is a pointer.
+// TestJSON checks that the text-encoded types marshal to the same JSON strings
+// by value and by pointer, round-trip cleanly, and reject null unless the
+// target is a pointer.
 func TestJSON(t *testing.T) {
 	secret := GenerateKey()
 	signature, err := secret.Sign([]byte("message"))

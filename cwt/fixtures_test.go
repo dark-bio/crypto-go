@@ -27,11 +27,17 @@ type noExpCert struct {
 
 // fixtureCorpus is the v0.16 fixture corpus pinning the CWT wire format.
 type fixtureCorpus struct {
-	XdsaSeed  string `json:"xdsa_seed"`
-	Domain    string `json:"domain"`
-	Now       uint64 `json:"now"`
-	Valid     string `json:"valid"`
-	Expired   string `json:"expired"`
+	// XdsaSeed is the hex-encoded signing key seed.
+	XdsaSeed string `json:"xdsa_seed"`
+	// Domain is the hex-encoded application domain.
+	Domain string `json:"domain"`
+	// Now is the Unix reference timestamp in seconds.
+	Now uint64 `json:"now"`
+	// Valid is the hex-encoded valid token fixture.
+	Valid string `json:"valid"`
+	// Expired is the hex-encoded expired token fixture.
+	Expired string `json:"expired"`
+	// Premature is the hex-encoded not-yet-valid token fixture.
 	Premature string `json:"premature"`
 }
 
@@ -61,8 +67,8 @@ func mustHex(t *testing.T, field string) []byte {
 	return blob
 }
 
-// Tests that the v0.16 fixture corpus still validates, since that was in the
-// first public release of the Ark, so we can't change the format anymore.
+// TestV016Fixtures checks that the committed v0.16 CWT fixtures still verify
+// and enforce their temporal bounds, pinning wire compatibility across releases.
 func TestV016Fixtures(t *testing.T) {
 	fx := fixtures(t)
 

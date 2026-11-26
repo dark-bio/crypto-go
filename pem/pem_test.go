@@ -87,8 +87,8 @@ func TestBlockLabels(t *testing.T) {
 	}
 }
 
-// Tests that a body without any base64 text is rejected, whether it has no
-// lines or only blank ones.
+// TestDecodeEmptyPayload checks that a body without base64 text is rejected,
+// whether it has no lines or only blank ones.
 func TestDecodeEmptyPayload(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -106,7 +106,7 @@ func TestDecodeEmptyPayload(t *testing.T) {
 	}
 }
 
-// Tests that encoding an empty payload panics, since Decode rejects it.
+// TestEncodeEmptyPayload checks that encoding an empty payload panics.
 func TestEncodeEmptyPayload(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -116,8 +116,8 @@ func TestEncodeEmptyPayload(t *testing.T) {
 	Encode("PUBLIC KEY", nil)
 }
 
-// Tests that payloads around the 64-character line length survive encoding
-// and decoding unchanged.
+// TestRoundTrip checks that payloads around the 64-character line boundary
+// survive encoding and decoding unchanged.
 func TestRoundTrip(t *testing.T) {
 	for _, size := range []int{1, 47, 48, 49, 96, 97} {
 		payload := bytes.Repeat([]byte{0xa5}, size)

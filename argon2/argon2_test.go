@@ -12,7 +12,7 @@ import (
 	"testing"
 )
 
-// Test vectors from Go's x/crypto/argon2 package.
+// TestKey checks Argon2id derivation against vectors from Go's x/crypto/argon2.
 // Copyright 2017 The Go Authors. All rights reserved.
 // https://cs.opensource.google/go/x/crypto/+/refs/tags/v0.39.0:argon2/argon2_test.go
 func TestKey(t *testing.T) {
@@ -44,8 +44,8 @@ func TestKey(t *testing.T) {
 	}
 }
 
-// Tests that the smallest inputs within the limits derive a key and that each
-// input just outside them panics.
+// TestKeyLimits checks that the smallest valid inputs derive a key and each
+// input just outside the limits panics.
 func TestKeyLimits(t *testing.T) {
 	password, salt := []byte("password"), []byte("somesalt")
 	if key := Key(password, salt, 1, 8, 1, 4); len(key) != 4 {

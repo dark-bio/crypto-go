@@ -19,10 +19,8 @@ import (
 	"github.com/dark-bio/crypto-go/internal/jsonext"
 )
 
-// Tests that a PEM encoded ML-DSA-65 private key can be decoded and re-encoded
-// to the same string. The purpose is not to battle-test the PEM implementation,
-// rather to ensure that the code implements the PEM format other subsystems
-// expect.
+// TestSecretKeyPEMCodec checks that a PEM-encoded ML-DSA-65 private key decodes
+// and re-encodes to the same PEM format.
 func TestSecretKeyPEMCodec(t *testing.T) {
 	input := `-----BEGIN PRIVATE KEY-----
 MIIP/gIBADALBglghkgBZQMEAxIEgg/qMIIP5gQgHIyGEFLAqH3CNU6XhuKXm3S9
@@ -123,10 +121,8 @@ sufdPOOp/GHJAqEQz7n/Owe/
 	}
 }
 
-// Tests that a PEM encoded ML-DSA-65 public key can be decoded and re-encoded
-// to the same string. The purpose is not to battle-test the PEM implementation,
-// rather to ensure that the code implements the PEM format other subsystems
-// expect.
+// TestPublicKeyPEMCodec checks that a PEM-encoded ML-DSA-65 public key decodes
+// and re-encodes to the same PEM format.
 func TestPublicKeyPEMCodec(t *testing.T) {
 	input := `-----BEGIN PUBLIC KEY-----
 MIIHsjALBglghkgBZQMEAxIDggehAFjMMavrIg8SGx+B/pVctURBa/irHl+Qgzsv
@@ -183,10 +179,8 @@ iRzoxabi41zZsCWuQbGQnb55uzuy2nZ1zTuWtinlmABfRHnAqb4ASkM1U/aaCBwV
 	}
 }
 
-// Tests that a DER encoded ML-DSA-65 private key can be decoded and re-encoded
-// to the same string. The purpose is not to battle-test the DER implementation,
-// rather to ensure that the code implements the DER format other subsystems
-// expect.
+// TestSecretKeyDERCodec checks that a DER-encoded ML-DSA-65 private key decodes
+// and re-encodes to the same DER bytes.
 func TestSecretKeyDERCodec(t *testing.T) {
 	der, _ := hex.DecodeString("" +
 		"30820ffe020100300b060960864801650304031204820fea30820fe60420" +
@@ -337,10 +331,8 @@ func TestSecretKeyDERCodec(t *testing.T) {
 	}
 }
 
-// Tests that a DER encoded ML-DSA-65 public key can be decoded and re-encoded
-// to the same string. The purpose is not to battle-test the DER implementation,
-// rather to ensure that the code implements the DER format other subsystems
-// expect.
+// TestPublicKeyDERCodec checks that a DER-encoded ML-DSA-65 public key decodes
+// and re-encodes to the same DER bytes.
 func TestPublicKeyDERCodec(t *testing.T) {
 	der, _ := hex.DecodeString("" +
 		"308207b2300b0609608648016503040312038207a10058cc31abeb220f12" +
@@ -465,8 +457,8 @@ func TestSignVerify(t *testing.T) {
 	}
 }
 
-// Tests that signing accepts a 255 byte context and panics on a longer one,
-// instead of returning an invalid signature.
+// TestSignContextLimit checks that signing accepts a 255-byte context and
+// panics on a longer one.
 func TestSignContextLimit(t *testing.T) {
 	secret := GenerateKey()
 
@@ -482,8 +474,8 @@ func TestSignContextLimit(t *testing.T) {
 	secret.Sign([]byte("message"), make([]byte, 256))
 }
 
-// Tests that a public key whose algorithm identifier carries parameters is
-// rejected.
+// TestPublicKeyDERRejectsParams checks that a public key whose algorithm
+// identifier carries parameters is rejected.
 func TestPublicKeyDERRejectsParams(t *testing.T) {
 	// Rebuild a valid public key with injected NULL algorithm parameters
 	der := GenerateKey().PublicKey().MarshalDER()
@@ -505,8 +497,8 @@ func TestPublicKeyDERRejectsParams(t *testing.T) {
 	}
 }
 
-// Tests that a private key whose algorithm identifier carries parameters is
-// rejected.
+// TestSecretKeyDERRejectsParams checks that a private key whose algorithm
+// identifier carries parameters is rejected.
 func TestSecretKeyDERRejectsParams(t *testing.T) {
 	// Rebuild a valid private key with NULL algorithm parameters spliced in
 	der := GenerateKey().MarshalDER()
@@ -538,9 +530,9 @@ func TestSecretKeyDERRejectsParams(t *testing.T) {
 	}
 }
 
-// Tests that the text-encoded types marshal to the same JSON strings by value
-// and by pointer, round-trip through them, and reject null unless the target
-// is a pointer.
+// TestJSON checks that the text-encoded types marshal to the same JSON strings
+// by value and by pointer, round-trip cleanly, and reject null unless the
+// target is a pointer.
 func TestJSON(t *testing.T) {
 	secret := GenerateKey()
 	signature, err := secret.Sign([]byte("message"), nil)

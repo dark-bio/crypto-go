@@ -74,11 +74,19 @@ type OEMBoot struct {
 type DebugState uint64
 
 const (
-	DebugEnabled                  DebugState = 0 // Debug is currently enabled
-	DebugDisabled                 DebugState = 1 // Debug is currently disabled
-	DebugDisabledSinceBoot        DebugState = 2 // Debug was disabled at boot and has not been enabled since
-	DebugDisabledPermanently      DebugState = 3 // Debug is disabled since boot, only the manufacturer may re-enable it
-	DebugDisabledFullyPermanently DebugState = 4 // All debug is permanently disabled, the manufacturer's included
+	// DebugEnabled indicates that debug is currently enabled.
+	DebugEnabled DebugState = 0
+	// DebugDisabled indicates that debug is currently disabled.
+	DebugDisabled DebugState = 1
+	// DebugDisabledSinceBoot indicates that debug was disabled at boot and has
+	// not been enabled since.
+	DebugDisabledSinceBoot DebugState = 2
+	// DebugDisabledPermanently indicates that debug is disabled since boot and
+	// only the manufacturer may re-enable it.
+	DebugDisabledPermanently DebugState = 3
+	// DebugDisabledFullyPermanently indicates that all debug is permanently
+	// disabled, including for the manufacturer.
+	DebugDisabledFullyPermanently DebugState = 4
 )
 
 // MarshalCBOR implements cbor.Marshaler.
@@ -135,11 +143,16 @@ type SWName struct {
 type Use uint64
 
 const (
-	UseGeneric           Use = 1 // General-purpose attestation
-	UseRegistration      Use = 2 // Attestation for service registration
-	UseProvisioning      Use = 3 // Attestation prior to key/config provisioning
-	UseCertIssuance      Use = 4 // Attestation for certificate signing requests
-	UseProofOfPossession Use = 5 // Attestation accompanying a proof-of-possession
+	// UseGeneric indicates general-purpose attestation.
+	UseGeneric Use = 1
+	// UseRegistration indicates attestation for service registration.
+	UseRegistration Use = 2
+	// UseProvisioning indicates attestation prior to key or config provisioning.
+	UseProvisioning Use = 3
+	// UseCertIssuance indicates attestation for certificate signing requests.
+	UseCertIssuance Use = 4
+	// UseProofOfPossession indicates attestation accompanying proof of possession.
+	UseProofOfPossession Use = 5
 )
 
 // MarshalCBOR implements cbor.Marshaler.

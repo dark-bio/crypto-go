@@ -20,7 +20,8 @@ import (
 	"github.com/dark-bio/crypto-go/pem"
 )
 
-// Tests that a private key can be serialized to bytes and parsed back.
+// TestSecretKeyBytesRoundtrip checks that a private key serializes to bytes
+// and parses back identically.
 func TestSecretKeyBytesRoundtrip(t *testing.T) {
 	key := GenerateKey()
 	keyBytes := key.Marshal()
@@ -30,7 +31,8 @@ func TestSecretKeyBytesRoundtrip(t *testing.T) {
 	}
 }
 
-// Tests that a public key can be serialized to bytes and parsed back.
+// TestPublicKeyBytesRoundtrip checks that a public key serializes to bytes and
+// parses back identically.
 func TestPublicKeyBytesRoundtrip(t *testing.T) {
 	key := GenerateKey().PublicKey()
 	keyBytes := key.Marshal()
@@ -43,7 +45,8 @@ func TestPublicKeyBytesRoundtrip(t *testing.T) {
 	}
 }
 
-// Tests that a private key can be serialized to DER and parsed back.
+// TestSecretKeyDERRoundtrip checks that a private key serializes to DER and
+// parses back identically.
 func TestSecretKeyDERRoundtrip(t *testing.T) {
 	key := GenerateKey()
 	der := key.MarshalDER()
@@ -56,7 +59,8 @@ func TestSecretKeyDERRoundtrip(t *testing.T) {
 	}
 }
 
-// Tests that a private key can be serialized to PEM and parsed back.
+// TestSecretKeyPEMRoundtrip checks that a private key serializes to PEM and
+// parses back identically.
 func TestSecretKeyPEMRoundtrip(t *testing.T) {
 	key := GenerateKey()
 	pemStr := key.MarshalPEM()
@@ -69,7 +73,8 @@ func TestSecretKeyPEMRoundtrip(t *testing.T) {
 	}
 }
 
-// Tests that a public key can be serialized to DER and parsed back.
+// TestPublicKeyDERRoundtrip checks that a public key serializes to DER and
+// parses back identically.
 func TestPublicKeyDERRoundtrip(t *testing.T) {
 	key := GenerateKey().PublicKey()
 	der := key.MarshalDER()
@@ -82,7 +87,8 @@ func TestPublicKeyDERRoundtrip(t *testing.T) {
 	}
 }
 
-// Tests that a public key can be serialized to PEM and parsed back.
+// TestPublicKeyPEMRoundtrip checks that a public key serializes to PEM and
+// parses back identically.
 func TestPublicKeyPEMRoundtrip(t *testing.T) {
 	key := GenerateKey().PublicKey()
 	pemStr := key.MarshalPEM()
@@ -95,12 +101,15 @@ func TestPublicKeyPEMRoundtrip(t *testing.T) {
 	}
 }
 
-// Test vectors from draft-connolly-cfrg-xwing-kem-10 Appendix D
+// ietfVectors holds test vectors from draft-connolly-cfrg-xwing-kem Appendix D.
 // https://datatracker.ietf.org/doc/html/draft-connolly-cfrg-xwing-kem
 var ietfVectors = struct {
-	SecretKeySeed string // 32-byte seed hex
-	SecretKeyPEM  string // PKCS#8 v1 PEM
-	PublicKeyPEM  string // SPKI PEM
+	// SecretKeySeed is the hex-encoded 32-byte seed.
+	SecretKeySeed string
+	// SecretKeyPEM is the PKCS#8 v1 PEM encoding.
+	SecretKeyPEM string
+	// PublicKeyPEM is the SPKI PEM encoding.
+	PublicKeyPEM string
 }{
 	SecretKeySeed: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
 	SecretKeyPEM: `-----BEGIN PRIVATE KEY-----
@@ -137,9 +146,9 @@ OhMjnzQvynZVtuquhFoiHOs+Z/VjnGGT9v3u9X45m4CLfzqitXQKre2QFj3F13XJ
 -----END PUBLIC KEY-----`,
 }
 
-// Tests operations with IETF test vectors: the private key must parse into
-// the published raw seed, re-encode into the published PEM and DER, and
-// expand to the draft's matching public key.
+// TestIETFVectors checks X-Wing key parsing and encoding against the IETF draft
+// vectors, verifying the raw seed, PEM and DER round-trips, and derived public
+// key.
 func TestIETFVectors(t *testing.T) {
 	// Round trip the secret key pem and verify the expected seed
 	key, err := ParseSecretKeyPEM(ietfVectors.SecretKeyPEM)
@@ -183,7 +192,8 @@ func TestIETFVectors(t *testing.T) {
 	}
 }
 
-// Tests sealing and opening various combinations of messages.
+// TestSealOpen checks single-shot sealing and opening across combinations of
+// plaintext and authenticated data.
 func TestSealOpen(t *testing.T) {
 	// Create the keys
 	secret := GenerateKey()
@@ -232,8 +242,8 @@ func TestSealOpen(t *testing.T) {
 	}
 }
 
-// Tests that a sender/receiver context can be established and used to
-// encrypt/decrypt multiple messages in sequence.
+// TestContextSealOpen checks that a sender and receiver pair can encrypt and
+// decrypt multiple messages in sequence.
 func TestContextSealOpen(t *testing.T) {
 	secret := GenerateKey()
 	public := secret.PublicKey()
@@ -273,9 +283,9 @@ func TestContextSealOpen(t *testing.T) {
 	}
 }
 
-// Tests that a receiver context rejects messages decrypted out of order.
-// The HPKE sequence counter is only advanced on success, so after a failed
-// open the context remains usable for the correct next message.
+// TestContextRejectsOutOfOrder checks that out-of-order decryption fails
+// without advancing the HPKE sequence counter, leaving the context usable for
+// the next expected message.
 func TestContextRejectsOutOfOrder(t *testing.T) {
 	secret := GenerateKey()
 	public := secret.PublicKey()
@@ -320,8 +330,8 @@ func TestContextRejectsOutOfOrder(t *testing.T) {
 	}
 }
 
-// Tests that mismatched domains between sender and receiver prevent
-// decryption (the HPKE contexts derive different keys).
+// TestContextRejectsWrongDomain checks that mismatched domains between sender
+// and receiver prevent decryption.
 func TestContextRejectsWrongDomain(t *testing.T) {
 	secret := GenerateKey()
 	public := secret.PublicKey()
@@ -343,7 +353,7 @@ func TestContextRejectsWrongDomain(t *testing.T) {
 	}
 }
 
-// Tests that mismatched additional authenticated data between seal and open
+// TestRejectsWrongAuth checks that mismatched additional authenticated data
 // prevents decryption for both single-shot and context-based APIs.
 func TestRejectsWrongAuth(t *testing.T) {
 	secret := GenerateKey()
@@ -385,8 +395,8 @@ func TestRejectsWrongAuth(t *testing.T) {
 	}
 }
 
-// Tests that a public key whose algorithm identifier carries parameters is
-// rejected.
+// TestPublicKeyDERRejectsParams checks that a public key whose algorithm
+// identifier carries parameters is rejected.
 func TestPublicKeyDERRejectsParams(t *testing.T) {
 	// Rebuild a valid public key with injected NULL algorithm parameters
 	der := GenerateKey().PublicKey().MarshalDER()
@@ -408,8 +418,8 @@ func TestPublicKeyDERRejectsParams(t *testing.T) {
 	}
 }
 
-// Tests that a private key whose algorithm identifier carries parameters is
-// rejected.
+// TestSecretKeyDERRejectsParams checks that a private key whose algorithm
+// identifier carries parameters is rejected.
 func TestSecretKeyDERRejectsParams(t *testing.T) {
 	// Rebuild a valid private key with NULL algorithm parameters spliced in
 	der := GenerateKey().MarshalDER()
@@ -441,9 +451,9 @@ func TestSecretKeyDERRejectsParams(t *testing.T) {
 	}
 }
 
-// Tests that the text-encoded types marshal to the same JSON strings by value
-// and by pointer, round-trip through them, and reject null unless the target
-// is a pointer.
+// TestJSON checks that the text-encoded types marshal to the same JSON strings
+// by value and by pointer, round-trip cleanly, and reject null unless the
+// target is a pointer.
 func TestJSON(t *testing.T) {
 	secret := GenerateKey()
 	fingerprint := secret.PublicKey().Fingerprint()

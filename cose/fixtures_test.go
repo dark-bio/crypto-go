@@ -75,8 +75,8 @@ func mustHex(t *testing.T, field string) []byte {
 	return blob
 }
 
-// Tests that the v0.16 fixture corpus still validates, since that was in the
-// first public release of the Ark, so we can't change the format anymore.
+// TestV016Fixtures checks that the committed v0.16 COSE fixtures still verify
+// and open, pinning wire compatibility across releases.
 func TestV016Fixtures(t *testing.T) {
 	fx := fixtures(t, "v0.16.json")
 

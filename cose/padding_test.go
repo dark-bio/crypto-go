@@ -230,7 +230,7 @@ func TestSealedPlaintextPadding(t *testing.T) {
 				if len(plaintext) != tt.size {
 					t.Fatalf("%d: plaintext size %d, want %d", i, len(plaintext), tt.size)
 				}
-				// Re-encryption preserves the fixture signature byte for byte
+				// Re-encryption preserves the fixture signature unchanged
 				if i == 1 && !bytes.Equal(plaintext[:3461], sign1) {
 					t.Fatal("re-encryption changed the fixture signature")
 				}

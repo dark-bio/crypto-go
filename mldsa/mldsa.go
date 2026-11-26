@@ -63,8 +63,8 @@ var (
 	// ErrMalformedKey is returned by the DER and PEM parsers when a key encoding
 	// cannot be parsed or its contents are unusable. Causes include wrong seed
 	// or key sizes, an expanded key that does not match its seed, unexpected
-	// algorithm parameters or an unsupported PKCS#8 version. The byte
-	// constructors cannot fail, and the wrapping error names the problem.
+	// algorithm parameters, or an unsupported PKCS#8 version. The wrapping error
+	// states the problem.
 	ErrMalformedKey = errors.New("mldsa: malformed key")
 
 	// ErrTrailingData is returned by the DER parsers, and through them by the
@@ -72,14 +72,16 @@ var (
 	ErrTrailingData = errors.New("mldsa: trailing data in key encoding")
 
 	// ErrInvalidSignature is returned by PublicKey.Verify when the signature
-	// does not verify under the key for the message and context, or it is not
-	// a well formed ML-DSA-65 signature at all.
+	// does not verify under the key for the message and context, or is not a
+	// valid ML-DSA-65 signature.
 	ErrInvalidSignature = errors.New("mldsa: signature verification failed")
 )
 
 // SecretKey contains an ML-DSA-65 private key for creating digital signatures.
 type SecretKey struct {
-	key  *mldsa65.PrivateKey
+	// key is the underlying expanded ML-DSA-65 private key.
+	key *mldsa65.PrivateKey
+	// seed is the 32-byte key generation seed.
 	seed [mldsa65.SeedSize]byte
 }
 
@@ -122,9 +124,8 @@ func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	if len(info.Algorithm.Parameters.FullBytes) != 0 {
 		return nil, fmt.Errorf("%w: unexpected algorithm parameters", ErrMalformedKey)
 	}
-	// Wrap the private key in a SEQUENCE containing:
-	//   - OCTET STRING (32 bytes): seed
-	//   - OCTET STRING (4032 bytes): expanded key
+	// Parse the private key SEQUENCE holding the 32-byte seed and 4032-byte
+	// expanded key as OCTET STRINGs
 	input := cryptobyte.String(info.PrivateKey)
 
 	var inner cryptobyte.String
@@ -246,10 +247,10 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 	return k.PublicKey().Fingerprint()
 }
 
-// Sign creates a hedged ML-DSA signature of the message with an optional context
-// string. Pass an empty slice for no context. Verification must use the same
-// bytes. This call will never return an error, the type is there for
-// composability.
+// Sign creates a hedged ML-DSA signature of the message with an optional
+// context string. Pass an empty slice for no context; verification must repeat
+// the same bytes. Sign never returns an error; the error return is present for
+// Signer interface composability.
 //
 // Panics if ctx is longer than 255 bytes.
 func (k *SecretKey) Sign(message []byte, ctx []byte) (*Signature, error) {
@@ -263,10 +264,11 @@ func (k *SecretKey) Sign(message []byte, ctx []byte) (*Signature, error) {
 // PublicKey contains an ML-DSA-65 public key for verifying digital signatures.
 //
 // The zero value is not a valid key, and using it panics. JSON decoding rejects
-// null, but a field missing from the input keeps the zero value without an
+// null, while a field missing from the input keeps the zero value without
 // error. To detect a missing key, decode into a *PublicKey field and check it
 // for nil.
 type PublicKey struct {
+	// key is the underlying ML-DSA-65 public key.
 	key *mldsa65.PublicKey
 }
 

@@ -725,9 +725,13 @@ func structFields(t reflect.Type) []reflect.StructField {
 
 // structTag holds the parsed components of a cbor struct tag.
 type structTag struct {
-	name     string
-	array    bool
-	key      bool
+	// name is the leading tag name or integer key string.
+	name string
+	// array reports whether the array option is set.
+	array bool
+	// key reports whether the key option is set.
+	key bool
+	// optional reports whether the optional option is set.
 	optional bool
 }
 
@@ -789,19 +793,26 @@ func wantArray(t reflect.Type) (bool, error) {
 
 // fieldInfo holds a struct field and its integer map key.
 type fieldInfo struct {
-	field    reflect.StructField
-	key      int64
+	// field is the reflected struct field with its full index path.
+	field reflect.StructField
+	// key is the CBOR integer map key.
+	key int64
+	// optional reports whether the field is omitted when nil or absent.
 	optional bool
-	ptrGroup int // >0: field belongs to pointer embed group N (nil = all fields absent)
+	// ptrGroup identifies the enclosing pointer embed group, or 0 for direct fields.
+	ptrGroup int
 }
 
 // ptrGroupState tracks pointer embed group IDs and their parent hierarchy
-// during field collection. Groups form a tree: when *A contains *B, B's
-// group is a child of A's group.
+// during field collection. When *A contains *B, B's group is a child of A's
+// group.
 type ptrGroupState struct {
-	nextID  int
-	parents map[int]int   // child group → parent group; absent = no parent
-	embeds  map[int][]int // group → field index path to the embed pointer
+	// nextID is the counter for allocating pointer embed group IDs.
+	nextID int
+	// parents maps each child group ID to its parent group ID.
+	parents map[int]int
+	// embeds maps each group ID to the field index path of its embed pointer.
+	embeds map[int][]int
 }
 
 // mapFields extracts fields with cbor:"N,key" tags from a struct type,
@@ -970,9 +981,11 @@ func isOptionalCapable(t reflect.Type) bool {
 	return isOptionType(t)
 }
 
-// arrayFieldInfo holds a struct field info for array encoding.
+// arrayFieldInfo holds a struct field and optional flag for array encoding.
 type arrayFieldInfo struct {
-	field    reflect.StructField
+	// field is the reflected struct field.
+	field reflect.StructField
+	// optional reports whether nil values encode as CBOR null.
 	optional bool
 }
 

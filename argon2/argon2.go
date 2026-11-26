@@ -8,9 +8,9 @@
 //
 // https://datatracker.ietf.org/doc/html/rfc9106
 //
-// It turns a password and a salt into key material, made deliberately slow and
-// memory hungry so guessing passwords is expensive. For stretching a secret
-// that is already random, see the hkdf package instead.
+// Derives key material from a password and salt, made deliberately slow and
+// memory-intensive so password guessing is expensive. For stretching a secret
+// that is already high entropy, use the hkdf package instead.
 package argon2
 
 import (
@@ -19,31 +19,29 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-// Key derives a key from the password, salt, and cost parameters using Argon2id,
-// returning a byte slice of the requested length that can be used as a
-// cryptographic key.
+// Key derives a key from password, salt, and cost parameters using Argon2id.
 //
-// RFC 9106 Section 4 recommends time=1, memory=2*1024*1024 (2 GiB) and
-// threads=4. Its second recommendation uses time=3, memory=64*1024 (64 MiB)
-// and threads=4. Both use a random 16-byte salt and a 32-byte output.
+// RFC 9106 Section 4 recommends time=1, memory=2*1024*1024 (2 GiB), and
+// threads=4, or time=3, memory=64*1024 (64 MiB), and threads=4 for
+// memory-constrained devices. Both profiles use a random 16-byte salt and a
+// 32-byte output.
 //
-// The time parameter is the number of passes and memory is the total working
-// memory in KiB. The threads parameter is Argon2's lane count, an algorithm
-// parameter that changes the derived key. The lanes run concurrently, but the
-// count must not follow the CPU count, or one password derives different keys
-// on different devices. Store the salt and all cost parameters so the same key
-// can be reproduced elsewhere.
+// time is the number of passes and memory is the working memory in KiB.
+// threads is Argon2's lane count, which changes the derived key. Lanes run
+// concurrently, so keep threads fixed rather than deriving it from the CPU
+// count, or one password yields different keys across devices. Store the salt
+// and cost parameters alongside the result to reproduce the key later.
 //
-// Key panics if any of these input limits are violated:
+// Key panics if any of these limits are violated:
 //
 //   - time must be at least 1.
 //   - threads must be at least 1.
-//   - memory must be at least 8*threads KiB.
-//   - salt must contain 8 to 2^32-1 bytes.
-//   - password must contain at most 2^32-1 bytes.
+//   - memory must be at least 8 * threads KiB.
+//   - salt must contain 8 to 2^32 - 1 bytes.
+//   - password must contain at most 2^32 - 1 bytes.
 //   - keyLen must be at least 4.
 //
-// RFC 9106 sets all of these except the 8-byte salt minimum, which follows the
+// RFC 9106 sets these limits except the 8-byte salt minimum, which follows the
 // Argon2 reference implementation.
 //
 // https://www.rfc-editor.org/rfc/rfc9106.html#section-4

@@ -15,6 +15,8 @@ import (
 
 // Errors returned by OEM ID operations.
 var (
+	// ErrInvalidOEMID is returned when an OEM ID uses an unsupported type,
+	// byte length, or uninitialized kind.
 	ErrInvalidOEMID = errors.New("eat: invalid OEM ID")
 )
 
@@ -72,18 +74,25 @@ func (o *OEMID) PEN() (uint64, bool) {
 type oemidKind uint8
 
 const (
-	oemidRandom oemidKind = 1 // 16-byte random
-	oemidIEEE   oemidKind = 2 // 3-byte IEEE OUI/MA-L
-	oemidPEN    oemidKind = 3 // IANA Private Enterprise Number
+	// oemidRandom identifies a 16-byte random manufacturer ID.
+	oemidRandom oemidKind = 1
+	// oemidIEEE identifies a 3-byte IEEE OUI/MA-L.
+	oemidIEEE oemidKind = 2
+	// oemidPEN identifies an IANA Private Enterprise Number.
+	oemidPEN oemidKind = 3
 )
 
 // oemidValue holds an OEM ID in one of three formats with custom CBOR
 // encoding per RFC 9711 Section 4.2.3.
 type oemidValue struct {
-	kind   oemidKind
+	// kind selects which OEM ID representation is populated.
+	kind oemidKind
+	// random holds the 16-byte random OEM ID when kind is oemidRandom.
 	random [16]byte
-	ieee   [3]byte
-	pen    uint64
+	// ieee holds the 3-byte IEEE OUI/MA-L when kind is oemidIEEE.
+	ieee [3]byte
+	// pen holds the IANA Private Enterprise Number when kind is oemidPEN.
+	pen uint64
 }
 
 // MarshalCBOR implements cbor.Marshaler.
