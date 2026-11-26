@@ -25,12 +25,12 @@ import (
 
 // Errors returned by EAT claim operations.
 var (
-	// ErrInvalidDebugState is returned when decoding a debug state outside the
-	// five values RFC 9711 defines. The wrapping error carries the value.
+	// ErrInvalidDebugState is returned for a debug state outside the five values
+	// RFC 9711 defines. The wrapping error carries the value.
 	ErrInvalidDebugState = errors.New("eat: invalid debug state")
 
-	// ErrInvalidUse is returned when decoding an intended use outside the five
-	// values RFC 9711 defines. The wrapping error carries the value.
+	// ErrInvalidUse is returned for an intended use outside the five values
+	// RFC 9711 defines. The wrapping error carries the value.
 	ErrInvalidUse = errors.New("eat: invalid intended use")
 )
 
@@ -83,6 +83,9 @@ const (
 
 // MarshalCBOR implements cbor.Marshaler.
 func (s *DebugState) MarshalCBOR(enc *cbor.Encoder) error {
+	if *s > DebugDisabledFullyPermanently {
+		return fmt.Errorf("%w: %d", ErrInvalidDebugState, *s)
+	}
 	enc.EncodeUint(uint64(*s))
 	return nil
 }
@@ -93,7 +96,7 @@ func (s *DebugState) UnmarshalCBOR(dec *cbor.Decoder) error {
 	if err != nil {
 		return err
 	}
-	if v > 4 {
+	if DebugState(v) > DebugDisabledFullyPermanently {
 		return fmt.Errorf("%w: %d", ErrInvalidDebugState, v)
 	}
 	*s = DebugState(v)
@@ -141,6 +144,9 @@ const (
 
 // MarshalCBOR implements cbor.Marshaler.
 func (u *Use) MarshalCBOR(enc *cbor.Encoder) error {
+	if *u < UseGeneric || *u > UseProofOfPossession {
+		return fmt.Errorf("%w: %d", ErrInvalidUse, *u)
+	}
 	enc.EncodeUint(uint64(*u))
 	return nil
 }
@@ -151,7 +157,7 @@ func (u *Use) UnmarshalCBOR(dec *cbor.Decoder) error {
 	if err != nil {
 		return err
 	}
-	if v < 1 || v > 5 {
+	if Use(v) < UseGeneric || Use(v) > UseProofOfPossession {
 		return fmt.Errorf("%w: %d", ErrInvalidUse, v)
 	}
 	*u = Use(v)

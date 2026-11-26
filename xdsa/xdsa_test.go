@@ -425,6 +425,7 @@ func TestSignatureComposeSplit(t *testing.T) {
 	}
 }
 
+// TestComposeSignVerify checks that a composite key produces distinct valid signatures.
 func TestComposeSignVerify(t *testing.T) {
 	mlSec := mldsa.GenerateKey()
 	edSec := eddsa.GenerateKey()
@@ -433,10 +434,21 @@ func TestComposeSignVerify(t *testing.T) {
 	compositePub := compositeSec.PublicKey()
 
 	message := []byte("message to sign with composite key")
-	signature, _ := compositeSec.Sign(message)
-
-	if err := compositePub.Verify(message, signature); err != nil {
-		t.Fatalf("failed to verify composite signature: %v", err)
+	first, err := compositeSec.Sign(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := compositeSec.Sign(message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *first == *second {
+		t.Fatal("repeated composite signature")
+	}
+	for _, sig := range []*Signature{first, second} {
+		if err := compositePub.Verify(message, sig); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

@@ -242,10 +242,7 @@ func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	if spki.SubjectPublicKey.BitLength != PublicKeySize*8 {
 		return nil, fmt.Errorf("%w: invalid public key length", ErrMalformedKey)
 	}
-	if _, err := new(edwards25519.Point).SetBytes(spki.SubjectPublicKey.Bytes); err != nil {
-		return nil, fmt.Errorf("%w: invalid curve point", ErrMalformedKey)
-	}
-	return &PublicKey{key: spki.SubjectPublicKey.Bytes}, nil
+	return ParsePublicKey([PublicKeySize]byte(spki.SubjectPublicKey.Bytes))
 }
 
 // MustParsePublicKeyDER parses a DER buffer into a public key.

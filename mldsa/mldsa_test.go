@@ -420,7 +420,16 @@ func TestPublicKeyDERCodec(t *testing.T) {
 	}
 }
 
-// TestSignVerify tests signing and verifying messages.
+// TestSecretKeyDERExpandedMismatch checks the expanded key against the seed.
+func TestSecretKeyDERExpandedMismatch(t *testing.T) {
+	der := GenerateKey().MarshalDER()
+	der[len(der)-1] ^= 1
+	if _, err := ParseSecretKeyDER(der); !errors.Is(err, ErrMalformedKey) {
+		t.Fatalf("inconsistent expanded key: %v", err)
+	}
+}
+
+// TestSignVerify checks that hedged signatures differ and verify in their context.
 func TestSignVerify(t *testing.T) {
 	secret := GenerateKey()
 	public := secret.PublicKey()
@@ -433,13 +442,25 @@ func TestSignVerify(t *testing.T) {
 		{message: []byte("message to authenticate"), ctx: []byte("application context")},
 	}
 	for _, tt := range tests {
-		signature, _ := secret.Sign(tt.message, tt.ctx)
-		if err := public.Verify(tt.message, tt.ctx, signature); err != nil {
-			t.Fatalf("failed to verify message: %v", err)
+		first, err := secret.Sign(tt.message, tt.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		second, err := secret.Sign(tt.message, tt.ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *first == *second {
+			t.Fatal("repeated ML-DSA signature")
+		}
+		for _, sig := range []*Signature{first, second} {
+			if err := public.Verify(tt.message, tt.ctx, sig); err != nil {
+				t.Fatal(err)
+			}
 		}
 		// Verify wrong context fails
-		if err := public.Verify(tt.message, []byte("wrong context"), signature); err == nil {
-			t.Fatal("expected verification to fail for wrong context")
+		if err := public.Verify(tt.message, []byte("wrong context"), first); !errors.Is(err, ErrInvalidSignature) {
+			t.Fatalf("wrong context: %v", err)
 		}
 	}
 }

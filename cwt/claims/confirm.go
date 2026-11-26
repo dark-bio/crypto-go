@@ -64,6 +64,9 @@ type confirmValue[T ConfirmKey] struct {
 
 // MarshalCBOR implements cbor.Marshaler.
 func (c *confirmValue[T]) MarshalCBOR(enc *cbor.Encoder) error {
+	if c.key == nil {
+		return cbor.ErrUnexpectedNil
+	}
 	var kty int64
 	var x []byte
 

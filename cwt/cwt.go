@@ -22,6 +22,7 @@ package cwt
 import (
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/dark-bio/crypto-go/cbor"
 	"github.com/dark-bio/crypto-go/cose"
@@ -51,18 +52,30 @@ var (
 
 // Issue signs a set of claims as a CWT using COSE Sign1.
 //
-// The claims value must be a struct whose fields encode as a CBOR map
-// (using cbor:"N,key" tags and/or embedded claim types).
+// The claims must encode as a deterministic CBOR map.
 func Issue(claims any, signer xdsa.Signer, domain []byte) ([]byte, error) {
+	return IssueAt(claims, signer, domain, time.Now().Unix())
+}
+
+// IssueAt signs a claims map as a CWT with the given Unix timestamp in the
+// protected COSE header.
+func IssueAt(claims any, signer xdsa.Signer, domain []byte, timestamp int64) ([]byte, error) {
 	claimsBytes, err := cbor.Marshal(claims)
 	if err != nil {
 		return nil, err
 	}
-	return cose.Sign(cbor.Raw(claimsBytes), cbor.Null{}, signer, domain)
+	defer clear(claimsBytes)
+	if _, err := cbor.NewDecoder(claimsBytes).DecodeMapHeader(); err != nil {
+		return nil, err
+	}
+	if err := cbor.Verify(claimsBytes); err != nil {
+		return nil, err
+	}
+	return cose.SignAt(cbor.Raw(claimsBytes), cbor.Null{}, signer, domain, timestamp)
 }
 
-// Verify verifies a CWT's COSE signature and temporal validity, then decodes
-// the claims into T.
+// Verify checks a CWT's COSE signature and deterministic CBOR claims map,
+// then decodes the claims into T.
 //
 // When now is non-nil, temporal claims are validated. The nbf claim (key 5)
 // must be present and nbf <= *now, and if the exp claim (key 4) is present then
@@ -79,18 +92,9 @@ func Verify[T any](data []byte, verifier *xdsa.PublicKey, domain []byte, now *ui
 	if err != nil {
 		return nil, err
 	}
-	// Extract and validate temporal claims if requested
-	if now != nil {
-		nbf, exp, err := readTemporalClaims(raw)
-		if err != nil {
-			return nil, err
-		}
-		if *now < nbf {
-			return nil, fmt.Errorf("%w: nbf %d > now %d", ErrNotYetValid, nbf, *now)
-		}
-		if exp != nil && *now >= *exp {
-			return nil, fmt.Errorf("%w: exp %d <= now %d", ErrAlreadyExpired, *exp, *now)
-		}
+	defer clear(raw)
+	if err := validateClaims(raw, now); err != nil {
+		return nil, err
 	}
 	// Decode claims into T
 	var result T
@@ -124,51 +128,54 @@ func Peek[T any](data []byte) (*T, error) {
 	return &result, nil
 }
 
-// readTemporalClaims iterates a raw CBOR map looking for exp (key 4) and
-// nbf (key 5). Returns nbf (required) and exp (optional, nil if absent).
-func readTemporalClaims(raw cbor.Raw) (nbf uint64, exp *uint64, err error) {
+// validateClaims checks the claims map and enforces its time bounds when now is set.
+func validateClaims(raw cbor.Raw, now *uint64) error {
+	// Parse the outer map first so duplicate temporal claims surface as ErrDuplicateKey
 	dec := cbor.NewDecoder(raw)
-
-	n, err := dec.DecodeMapHeader()
+	entries, err := dec.DecodeMapEntries()
 	if err != nil {
-		return 0, nil, err
-	}
-	var foundNbf bool
-	for range n {
-		key, err := dec.DecodeInt()
-		if err != nil {
-			return 0, nil, err
+		var dup *cbor.DuplicateMapKeyError
+		if errors.As(err, &dup) && (dup.Key == 4 || dup.Key == 5) {
+			return fmt.Errorf("%w: %d", ErrDuplicateKey, dup.Key)
 		}
-		switch key {
-		case 4: // exp (reject duplicates)
-			if exp != nil {
-				return 0, nil, fmt.Errorf("%w: %d", ErrDuplicateKey, key)
-			}
-			val, err := dec.DecodeUint()
+		return err
+	}
+	if err := dec.Finish(); err != nil {
+		return err
+	}
+	// Validate nested values and the depth of the complete map
+	if err := cbor.Verify(raw); err != nil {
+		return err
+	}
+	if now == nil {
+		return nil
+	}
+	// Decode and enforce time bounds when the caller supplies a reference clock
+	var nbf, exp *uint64
+	for _, entry := range entries {
+		switch entry.Key {
+		case 4:
+			val, err := cbor.NewDecoder(entry.Value).DecodeUint()
 			if err != nil {
-				return 0, nil, err
+				return err
 			}
 			exp = &val
-
-		case 5: // nbf (reject duplicates)
-			if foundNbf {
-				return 0, nil, fmt.Errorf("%w: %d", ErrDuplicateKey, key)
-			}
-			val, err := dec.DecodeUint()
+		case 5:
+			val, err := cbor.NewDecoder(entry.Value).DecodeUint()
 			if err != nil {
-				return 0, nil, err
+				return err
 			}
-			nbf = val
-			foundNbf = true
-
-		default:
-			if _, err := dec.DecodeRaw(); err != nil {
-				return 0, nil, err
-			}
+			nbf = &val
 		}
 	}
-	if !foundNbf {
-		return 0, nil, ErrMissingNbf
+	if nbf == nil {
+		return ErrMissingNbf
 	}
-	return nbf, exp, nil
+	if *now < *nbf {
+		return fmt.Errorf("%w: nbf %d > now %d", ErrNotYetValid, *nbf, *now)
+	}
+	if exp != nil && *now >= *exp {
+		return fmt.Errorf("%w: exp %d <= now %d", ErrAlreadyExpired, *exp, *now)
+	}
+	return nil
 }

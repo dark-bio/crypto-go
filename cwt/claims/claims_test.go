@@ -16,6 +16,15 @@ import (
 	"github.com/dark-bio/crypto-go/xhpke"
 )
 
+// TestConfirmNilKey checks that both confirmation key types require a public key.
+func TestConfirmNilKey(t *testing.T) {
+	for _, claim := range []any{Confirm[*xdsa.PublicKey]{}, Confirm[*xhpke.PublicKey]{}} {
+		if _, err := cbor.Marshal(claim); !errors.Is(err, cbor.ErrUnexpectedNil) {
+			t.Errorf("%T: %v", claim, err)
+		}
+	}
+}
+
 // TestConfirmXDSA verifies round-trip encoding of a Confirm[*xdsa.PublicKey].
 func TestConfirmXDSA(t *testing.T) {
 	key := xdsa.GenerateKey().PublicKey()

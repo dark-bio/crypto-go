@@ -16,6 +16,7 @@ package mldsa
 import (
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/base64"
@@ -150,10 +151,9 @@ func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 
 	_, key := mldsa65.NewKeyFromSeed(&seed)
 	expanded, _ := key.MarshalBinary()
-	for i := range expanded {
-		if expanded[i] != expandedBytes[i] {
-			return nil, fmt.Errorf("%w: expanded key does not match seed", ErrMalformedKey)
-		}
+	defer clear(expanded)
+	if subtle.ConstantTimeCompare(expanded, expandedBytes) != 1 {
+		return nil, fmt.Errorf("%w: expanded key does not match seed", ErrMalformedKey)
 	}
 	return &SecretKey{
 		key:  key,
@@ -246,7 +246,7 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 	return k.PublicKey().Fingerprint()
 }
 
-// Sign creates a digital signature of the message with an optional context
+// Sign creates a hedged ML-DSA signature of the message with an optional context
 // string. Pass an empty slice for no context. Verification must use the same
 // bytes. This call will never return an error, the type is there for
 // composability.
@@ -254,7 +254,7 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 // Panics if ctx is longer than 255 bytes.
 func (k *SecretKey) Sign(message []byte, ctx []byte) (*Signature, error) {
 	var sig Signature
-	if err := mldsa65.SignTo(k.key, message, ctx, false, sig[:]); err != nil {
+	if err := mldsa65.SignTo(k.key, message, ctx, true, sig[:]); err != nil {
 		panic("mldsa: " + err.Error())
 	}
 	return &sig, nil

@@ -80,6 +80,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"unicode/utf8"
 )
 
@@ -126,8 +127,8 @@ const (
 // maxInt is the maximum value of int, used for overflow checks.
 const maxInt = int(^uint(0) >> 1)
 
-// maxDepth is the maximum nesting depth for CBOR arrays and maps. Inputs nested
-// deeper than this are rejected to prevent stack overflow from recursive parsing.
+// maxDepth is the maximum number of levels in a CBOR item, counting the root
+// and the innermost value.
 const maxDepth = 32
 
 // Errors returned by CBOR encoding and decoding.
@@ -183,18 +184,47 @@ var (
 	// struct requires.
 	ErrMissingMapKey = errors.New("missing required map key")
 
-	// ErrUnexpectedNil is returned when encoding a nil slice or pointer outside
-	// a struct field tagged optional.
+	// ErrUnexpectedNil is returned for a nil decode target or when encoding a
+	// nil value outside a struct field tagged optional.
 	ErrUnexpectedNil = errors.New("unexpected nil value (field not marked optional)")
 
 	// ErrUnexpectedNull is returned when decoding a null into a value that does
 	// not allow it.
 	ErrUnexpectedNull = errors.New("unexpected null value (field not marked optional)")
 
-	// ErrMaxDepthExceeded is returned by Verify, and when decoding a Raw item,
-	// if arrays or maps nest deeper than 32 levels.
+	// ErrMaxDepthExceeded is returned by Verify and Raw decoding when an item
+	// exceeds 32 levels, counting the root.
 	ErrMaxDepthExceeded = errors.New("nesting depth exceeds maximum")
 )
+
+// DuplicateMapKeyError is returned when a CBOR map carries the same integer
+// key twice. It unwraps to ErrDuplicateMapKey.
+type DuplicateMapKeyError struct {
+	// Key is the repeated integer map key.
+	Key int64
+}
+
+// Error formats the duplicate key diagnostic.
+func (e *DuplicateMapKeyError) Error() string {
+	return fmt.Sprintf("%s: %d", ErrDuplicateMapKey, e.Key)
+}
+
+// Unwrap returns ErrDuplicateMapKey for errors.Is matching.
+func (e *DuplicateMapKeyError) Unwrap() error {
+	return ErrDuplicateMapKey
+}
+
+// MapEntry is one key-value pair from a CBOR map whose value has not been
+// parsed beyond locating its item boundary.
+type MapEntry struct {
+	// Key is the integer map key.
+	Key int64
+
+	// Value slices the raw encoded CBOR item in the decoder's input buffer
+	// with capacity capped to the item length. Mutating its elements modifies
+	// the underlying input buffer.
+	Value Raw
+}
 
 // Encoder is the low-level implementation of the CBOR encoder with only the
 // handful of desired types supported.
@@ -448,6 +478,50 @@ func (d *Decoder) DecodeMapHeader() (uint64, error) {
 	return length, nil
 }
 
+// mapEntrySize is the in-memory size of one MapEntry, used to bound upfront
+// slice allocation in DecodeMapEntries.
+var mapEntrySize = int(reflect.TypeFor[MapEntry]().Size())
+
+// DecodeMapEntries decodes a CBOR map with integer keys in deterministic
+// order, returning each key paired with a slice of its raw encoded value in
+// the decoder's input buffer.
+//
+// Values are traversed only enough to locate item boundaries, like DecodeRaw.
+// Call Verify on the map bytes when full validation of nested items is needed.
+func (d *Decoder) DecodeMapEntries() ([]MapEntry, error) {
+	length, err := d.DecodeMapHeader()
+	if err != nil {
+		return nil, err
+	}
+	// Cap upfront capacity by remaining wire bytes to prevent memory amplification
+	remaining := len(d.data) - d.pos
+	safeCap := remaining/mapEntrySize + 16
+	entries := make([]MapEntry, 0, min(int(length), safeCap))
+
+	var prev int64
+	for i := range length {
+		key, err := d.DecodeInt()
+		if err != nil {
+			return nil, err
+		}
+		if i > 0 {
+			if key == prev {
+				return nil, &DuplicateMapKeyError{Key: key}
+			}
+			if mapKeyCmp(prev, key) > 0 {
+				return nil, fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, key, prev)
+			}
+		}
+		prev = key
+		start := d.pos
+		if err := skipObject(d, maxDepth); err != nil {
+			return nil, err
+		}
+		entries = append(entries, MapEntry{Key: key, Value: Raw(d.data[start:d.pos:d.pos])})
+	}
+	return entries, nil
+}
+
 // DecodeBool decodes a CBOR boolean value.
 func (d *Decoder) DecodeBool() (bool, error) {
 	if d.pos >= len(d.data) {
@@ -462,6 +536,9 @@ func (d *Decoder) DecodeBool() (bool, error) {
 		d.pos++
 		return true, nil
 	default:
+		if b>>5 == MajorSimple {
+			return false, ErrUnsupportedType
+		}
 		return false, fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, b>>5, MajorSimple)
 	}
 }
@@ -472,8 +549,11 @@ func (d *Decoder) DecodeNull() error {
 		return ErrUnexpectedEOF
 	}
 	b := d.data[d.pos]
-	if b != MajorSimple<<5|simpleNull {
+	if b>>5 != MajorSimple {
 		return fmt.Errorf("%w: %d, want %d", ErrInvalidMajorType, b>>5, MajorSimple)
+	}
+	if b != MajorSimple<<5|simpleNull {
+		return ErrUnsupportedType
 	}
 	d.pos++
 	return nil
@@ -555,6 +635,10 @@ func (d *Decoder) decodeHeader() (uint8, uint64, error) {
 	default:
 		return 0, 0, fmt.Errorf("%w: %d", ErrInvalidAdditionalInfo, info)
 	}
+	// A float's payload has no shortest-form integer encoding
+	if major == MajorSimple && info >= infoUint16 {
+		return 0, 0, ErrUnsupportedType
+	}
 	// Ensure it was canonical in the first place
 	var canonical bool
 	switch {
@@ -629,7 +713,11 @@ func mapKeyCmp(a, b int64) int {
 // Raw is a placeholder type to allow only partially parsing CBOR objects when
 // some part might depend on another (e.g. version tag, method in an RPC, etc).
 //
-// Encoding copies the bytes verbatim, without checking that they contain even
+// Marshal treats a nil Raw as an absent slice. It returns ErrUnexpectedNil
+// for a required value, encodes null in an optional array field, and omits
+// an optional map field.
+//
+// Encoding a non-nil Raw copies its bytes without checking that they contain even
 // one valid CBOR item. Decoding traverses one item's structure and checks its
 // headers, lengths, supported types, and nesting depth, but does not validate
 // text as UTF-8 or check map key types, order, or duplicates. Use Verify on the
@@ -745,16 +833,21 @@ func verifyObject(dec *Decoder, depth int) error {
 		return nil
 
 	case MajorMap:
-		var prevKey *int64
-		for range value {
+		var prev int64
+		for i := range value {
 			key, err := dec.DecodeInt()
 			if err != nil {
 				return err
 			}
-			if prevKey != nil && mapKeyCmp(*prevKey, key) >= 0 {
-				return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, key, *prevKey)
+			if i > 0 {
+				if key == prev {
+					return &DuplicateMapKeyError{Key: key}
+				}
+				if mapKeyCmp(prev, key) > 0 {
+					return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, key, prev)
+				}
 			}
-			prevKey = &key
+			prev = key
 			if err := verifyObject(dec, depth-1); err != nil {
 				return err
 			}

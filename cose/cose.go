@@ -179,6 +179,11 @@ type coseSign1 struct {
 	Signature   xdsa.Signature
 }
 
+// clearPayload wipes the decoded payload, including one read before a decode error.
+func (s *coseSign1) clearPayload() {
+	clear(s.Payload)
+}
+
 // coseEncrypt0 is the COSE_Encrypt0 structure per RFC 9052 Section 5.2.
 //
 //	COSE_Encrypt0 = [
@@ -295,6 +300,7 @@ func SignAt(msgToEmbed, msgToAuth any, signer xdsa.Signer, domain []byte, timest
 	if err != nil {
 		return nil, err
 	}
+	defer clear(embed)
 	auth, err := cbor.Marshal(msgToAuth)
 	if err != nil {
 		return nil, err
@@ -305,7 +311,7 @@ func SignAt(msgToEmbed, msgToAuth any, signer xdsa.Signer, domain []byte, timest
 // signAt creates a COSE_Sign1 digital signature with an explicit timestamp (internal).
 func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, timestamp int64) ([]byte, error) {
 	// Restrict the user's domain to the context of this library
-	info := []byte(DomainPrefix + string(domain))
+	info := append([]byte(DomainPrefix), domain...)
 	aad, err := cbor.Marshal(&sigAAD{
 		Info:      info,
 		MsgToAuth: msgToAuth,
@@ -334,6 +340,7 @@ func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, tim
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
+	defer clear(toBeSigned)
 	signature, err := signer.Sign(toBeSigned)
 	if err != nil {
 		return nil, err
@@ -355,7 +362,7 @@ func signAt(msgToEmbed, msgToAuth []byte, signer xdsa.Signer, domain []byte, tim
 // signDetachedAt creates a COSE_Sign1 digital signature with null payload (internal).
 func signDetachedAt(msgToAuth []byte, signer xdsa.Signer, domain []byte, timestamp int64) ([]byte, error) {
 	// Restrict the user's domain to the context of this library
-	info := []byte(DomainPrefix + string(domain))
+	info := append([]byte(DomainPrefix), domain...)
 	aad, err := cbor.Marshal(&sigAAD{
 		Info:      info,
 		MsgToAuth: msgToAuth,
@@ -384,6 +391,7 @@ func signDetachedAt(msgToAuth []byte, signer xdsa.Signer, domain []byte, timesta
 	if err != nil {
 		panic(err) // cannot fail, be loud if it does
 	}
+	defer clear(toBeSigned)
 	signature, err := signer.Sign(toBeSigned)
 	if err != nil {
 		return nil, err
@@ -450,7 +458,7 @@ func absDiff(a, b int64) uint64 {
 // verifyDetached validates a COSE_Sign1 digital signature with null payload (internal).
 func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) error {
 	// Restrict the user's domain to the context of this library
-	info := []byte(DomainPrefix + string(domain))
+	info := append([]byte(DomainPrefix), domain...)
 	aad, err := cbor.Marshal(&sigAAD{
 		Info:      info,
 		MsgToAuth: msgToAuth,
@@ -460,6 +468,7 @@ func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, doma
 	}
 	// Parse COSE_Sign1
 	var sign1 coseSign1
+	defer sign1.clearPayload()
 	if err := cbor.Unmarshal(msgToCheck, &sign1); err != nil {
 		return err
 	}
@@ -485,7 +494,11 @@ func verifyDetached(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, doma
 		ExternalAAD: aad,
 		Payload:     []byte{},
 	}
-	toBeSigned, _ := cbor.Marshal(&sig)
+	toBeSigned, err := cbor.Marshal(&sig)
+	if err != nil {
+		panic(err) // cannot fail, be loud if it does
+	}
+	defer clear(toBeSigned)
 
 	// Verify signature
 	var xdsasig xdsa.Signature = sign1.Signature
@@ -536,6 +549,7 @@ func VerifyAt[T any](msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey,
 	if err != nil {
 		return zero, err
 	}
+	defer clear(payload)
 	var result T
 	if err := cbor.Unmarshal(payload, &result); err != nil {
 		return zero, err
@@ -546,7 +560,7 @@ func VerifyAt[T any](msgToCheck []byte, msgToAuth any, verifier *xdsa.PublicKey,
 // verify validates a COSE_Sign1 digital signature and returns the payload (internal).
 func verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byte, maxDrift *uint64, now int64) ([]byte, error) {
 	// Restrict the user's domain to the context of this library
-	info := []byte(DomainPrefix + string(domain))
+	info := append([]byte(DomainPrefix), domain...)
 	aad, err := cbor.Marshal(&sigAAD{
 		Info:      info,
 		MsgToAuth: msgToAuth,
@@ -556,6 +570,7 @@ func verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byt
 	}
 	// Parse COSE_Sign1
 	var sign1 coseSign1
+	defer sign1.clearPayload()
 	if err := cbor.Unmarshal(msgToCheck, &sign1); err != nil {
 		return nil, err
 	}
@@ -581,14 +596,20 @@ func verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byt
 		ExternalAAD: aad,
 		Payload:     sign1.Payload,
 	}
-	toBeSigned, _ := cbor.Marshal(&sig)
+	toBeSigned, err := cbor.Marshal(&sig)
+	if err != nil {
+		panic(err) // cannot fail, be loud if it does
+	}
+	defer clear(toBeSigned)
 
 	// Verify signature
 	var xdsasig xdsa.Signature = sign1.Signature
 	if err := verifier.Verify(toBeSigned, &xdsasig); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidSignature, err)
 	}
-	return sign1.Payload, nil
+	payload := sign1.Payload
+	sign1.Payload = nil // transfer ownership to the caller
+	return payload, nil
 }
 
 // Signer extracts the signer's fingerprint from a COSE_Sign1 signature without
@@ -602,6 +623,7 @@ func verify(msgToCheck, msgToAuth []byte, verifier *xdsa.PublicKey, domain []byt
 // Returns the signer's fingerprint from the protected header's kid field.
 func Signer(signature []byte) (xdsa.Fingerprint, error) {
 	var sign1 coseSign1
+	defer sign1.clearPayload()
 	if err := cbor.Unmarshal(signature, &sign1); err != nil {
 		return xdsa.Fingerprint{}, err
 	}
@@ -627,6 +649,7 @@ func Peek[T any](signature []byte) (T, error) {
 	var zero T
 
 	var sign1 coseSign1
+	defer sign1.clearPayload()
 	if err := cbor.Unmarshal(signature, &sign1); err != nil {
 		return zero, err
 	}
@@ -678,6 +701,7 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 	if err != nil {
 		return nil, err
 	}
+	defer clear(seal)
 	auth, err := cbor.Marshal(msgToAuth)
 	if err != nil {
 		return nil, err
@@ -687,6 +711,7 @@ func SealAt(msgToSeal, msgToAuth any, signer xdsa.Signer, recipient *xhpke.Publi
 	if err != nil {
 		return nil, err
 	}
+	defer clear(signed)
 
 	// Encrypt the signed message to the recipient
 	return Encrypt(signed, cbor.Raw(auth), recipient, domain, padding)
@@ -799,6 +824,7 @@ func OpenAt[T any](msgToOpen []byte, msgToAuth any, recipient *xhpke.SecretKey, 
 	if err != nil {
 		return zero, err
 	}
+	defer clear(signed)
 	// Verify the signature and extract the payload
 	payload, err := VerifyAt[T](signed, msgToAuth, sender, domain, maxDrift, now)
 	if err != nil {

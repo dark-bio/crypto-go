@@ -71,6 +71,12 @@ var unitType = reflect.TypeOf(Unit{})
 // nullType is used for type comparison in reflection.
 var nullType = reflect.TypeOf(Null{})
 
+// rawType is used for type comparison in reflection.
+var rawType = reflect.TypeOf(Raw{})
+
+// optionPkgPath identifies the package that declares Option[T].
+var optionPkgPath = reflect.TypeFor[Option[int]]().PkgPath()
+
 // Option represents a value that may be absent, encoding as CBOR null when
 // Some is false. As a struct field without the "optional" tag, its key is
 // always present with a value or null. With the tag, an absent value omits the
@@ -95,19 +101,22 @@ func MakeNone[T any]() Option[T] {
 
 // isOptionType checks if a type is Option[T] for some T.
 func isOptionType(t reflect.Type) bool {
-	if t.Kind() != reflect.Struct {
-		return false
-	}
-	if t.NumField() != 2 {
-		return false
-	}
-	f0, f1 := t.Field(0), t.Field(1)
-	return f0.Name == "Value" && f1.Name == "Some" && f1.Type.Kind() == reflect.Bool
+	return t.PkgPath() == optionPkgPath && strings.HasPrefix(t.Name(), "Option[")
 }
 
 // encodeValue recursively encodes a reflect.Value to CBOR.
 // The optional flag indicates whether nil values are allowed (from struct tag).
 func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
+	if !v.IsValid() {
+		return ErrUnexpectedNil
+	}
+	if (v.Kind() == reflect.Pointer || v.Kind() == reflect.Slice) && v.IsNil() {
+		if !optional {
+			return ErrUnexpectedNil
+		}
+		enc.EncodeNull()
+		return nil
+	}
 	// Check if the value implements Marshaler (try pointer first, then value).
 	// When the value is not addressable (e.g. passed by value through an any
 	// interface), make a temporary addressable copy so pointer-receiver methods
@@ -153,24 +162,10 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 		}
 		// []byte encodes as CBOR byte string
 		if v.Type().Elem().Kind() == reflect.Uint8 {
-			if v.IsNil() {
-				if !optional {
-					return ErrUnexpectedNil
-				}
-				enc.EncodeNull()
-				return nil
-			}
 			enc.EncodeBytes(v.Bytes())
 			return nil
 		}
 		// []T is encoded as a CBOR array
-		if v.IsNil() {
-			if !optional {
-				return ErrUnexpectedNil
-			}
-			enc.EncodeNull()
-			return nil
-		}
 		enc.EncodeArrayHeader(v.Len())
 		for i := range v.Len() {
 			if err := encodeValue(enc, v.Index(i), false); err != nil {
@@ -221,8 +216,15 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 			return encodeValue(enc, v.FieldByName("Value"), false)
 		}
 		// Check for array or tomap tag on the struct
-		if wantArray(t) {
-			fields := arrayFields(t)
+		isArray, err := wantArray(t)
+		if err != nil {
+			return err
+		}
+		if isArray {
+			fields, err := arrayFields(t)
+			if err != nil {
+				return err
+			}
 			enc.EncodeArrayHeader(len(fields))
 			for _, f := range fields {
 				fv, err := fieldByIndex(v, f.field.Index, false)
@@ -283,13 +285,6 @@ func encodeValue(enc *Encoder, v reflect.Value, optional bool) error {
 		return nil
 
 	case reflect.Ptr:
-		if v.IsNil() {
-			if !optional {
-				return ErrUnexpectedNil
-			}
-			enc.EncodeNull()
-			return nil
-		}
 		return encodeValue(enc, v.Elem(), false)
 
 	default:
@@ -308,49 +303,47 @@ func Unmarshal(data []byte, v any) error {
 	return dec.Finish()
 }
 
-// Decode reads a value from the decoder using reflection.
+// Decode reads the next value into v, which must be a non-nil pointer.
 func (dec *Decoder) Decode(v any) error {
-	return decodeValue(dec, reflect.ValueOf(v), false)
+	target := reflect.ValueOf(v)
+	if !target.IsValid() {
+		return ErrUnexpectedNil
+	}
+	if target.Kind() != reflect.Pointer {
+		return fmt.Errorf("%w: decode target must be a pointer", ErrUnsupportedType)
+	}
+	if target.IsNil() {
+		return ErrUnexpectedNil
+	}
+	return decodeValue(dec, target.Elem(), false)
 }
 
 // decodeValue recursively decodes CBOR into a reflect.Value.
 // The optional flag indicates whether null values are allowed (from struct tag).
 func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
-	// Check if the value implements Unmarshaler (must be addressable pointer receiver)
 	if v.Kind() == reflect.Ptr {
+		// An optional pointer decodes CBOR null as nil before invoking Unmarshaler
+		if optional && dec.PeekNull() {
+			v.SetZero()
+			return dec.DecodeNull()
+		}
+		elem := v.Type().Elem()
+		// Raw, Option, and Null handle CBOR null themselves
+		if dec.PeekNull() && elem != rawType && !isOptionType(elem) && elem != nullType {
+			return ErrUnexpectedNull
+		}
 		if v.IsNil() {
-			v.Set(reflect.New(v.Type().Elem()))
+			v.Set(reflect.New(elem))
 		}
 		if u, ok := v.Interface().(Unmarshaler); ok {
 			return u.UnmarshalCBOR(dec)
 		}
+		v = v.Elem()
+		optional = false // inner value is no longer optional
 	} else if v.CanAddr() {
 		if u, ok := v.Addr().Interface().(Unmarshaler); ok {
 			return u.UnmarshalCBOR(dec)
 		}
-	}
-	// Handle pointer types specially - null decodes as nil pointer
-	if v.Kind() == reflect.Ptr {
-		// Option[T] handles null internally, so don't intercept it here.
-		// Raw captures any CBOR value (including null) as raw bytes,
-		// so don't intercept null for *Raw either.
-		if !isOptionType(v.Type().Elem()) && v.Type().Elem() != reflect.TypeOf(Raw{}) {
-			if dec.PeekNull() {
-				if !optional {
-					return ErrUnexpectedNull
-				}
-				if err := dec.DecodeNull(); err != nil {
-					return err
-				}
-				v.Set(reflect.Zero(v.Type()))
-				return nil
-			}
-		}
-		if v.IsNil() {
-			v.Set(reflect.New(v.Type().Elem()))
-		}
-		v = v.Elem()
-		optional = false // inner value is no longer optional
 	}
 
 	switch v.Kind() {
@@ -367,6 +360,9 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		if err != nil {
 			return err
 		}
+		if v.OverflowUint(val) {
+			return fmt.Errorf("%w: %d does not fit %s", ErrIntegerOverflow, val, v.Type())
+		}
 		v.SetUint(val)
 		return nil
 
@@ -374,6 +370,9 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		val, err := dec.DecodeInt()
 		if err != nil {
 			return err
+		}
+		if v.OverflowInt(val) {
+			return fmt.Errorf("%w: %d does not fit %s", ErrIntegerOverflow, val, v.Type())
 		}
 		v.SetInt(val)
 		return nil
@@ -435,11 +434,18 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 		}
 		n := int(length)
 		if v.IsNil() || v.Cap() < n {
-			v.Set(reflect.MakeSlice(v.Type(), n, n))
+			// Bound the initial allocation by the wire bytes available for elements
+			elemSize := max(v.Type().Elem().Size(), 1)
+			capacity := min(n, int(uintptr(len(dec.data)-dec.pos)/elemSize))
+			v.Set(reflect.MakeSlice(v.Type(), capacity, capacity))
 		} else {
 			v.SetLen(n)
 		}
 		for i := range n {
+			if i == v.Len() {
+				v.Grow(1)
+				v.SetLen(min(n, v.Cap()))
+			}
 			if err := decodeValue(dec, v.Index(i), false); err != nil {
 				return err
 			}
@@ -510,8 +516,15 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 			return nil
 		}
 		// Check if this is an array struct or tomap struct
-		if wantArray(t) {
-			fields := arrayFields(t)
+		isArray, err := wantArray(t)
+		if err != nil {
+			return err
+		}
+		if isArray {
+			fields, err := arrayFields(t)
+			if err != nil {
+				return err
+			}
 			length, err := dec.DecodeArrayHeader()
 			if err != nil {
 				return err
@@ -594,7 +607,7 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 						}
 					}
 					if duplicate {
-						return fmt.Errorf("%w: key %d", ErrDuplicateMapKey, nextKey)
+						return &DuplicateMapKeyError{Key: nextKey}
 					}
 					if known {
 						return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, nextKey, mf.key)
@@ -634,7 +647,7 @@ func decodeValue(dec *Decoder, v reflect.Value, optional bool) error {
 					}
 				}
 				if duplicate {
-					return fmt.Errorf("%w: key %d", ErrDuplicateMapKey, nextKey)
+					return &DuplicateMapKeyError{Key: nextKey}
 				}
 				if known {
 					return fmt.Errorf("%w: %d must come before %d", ErrInvalidMapKeyOrder, nextKey, mFields[len(mFields)-1].key)
@@ -710,22 +723,68 @@ func structFields(t reflect.Type) []reflect.StructField {
 	return fields
 }
 
-// wantArray checks if a struct type has the cbor:"_,array" tag pattern. The tag
-// can be on any field and indicates the struct should encode as an array.
-func wantArray(t reflect.Type) bool {
+// structTag holds the parsed components of a cbor struct tag.
+type structTag struct {
+	name     string
+	array    bool
+	key      bool
+	optional bool
+}
+
+// parseTag parses and validates a cbor struct tag, rejecting unknown,
+// repeated, or conflicting options.
+func parseTag(tag string) (structTag, error) {
+	parts := strings.Split(tag, ",")
+	st := structTag{name: parts[0]}
+	for _, opt := range parts[1:] {
+		switch opt {
+		case "array":
+			if st.array {
+				return structTag{}, fmt.Errorf("%w: duplicate tag option %q", ErrUnsupportedType, opt)
+			}
+			st.array = true
+		case "key":
+			if st.key {
+				return structTag{}, fmt.Errorf("%w: duplicate tag option %q", ErrUnsupportedType, opt)
+			}
+			st.key = true
+		case "optional":
+			if st.optional {
+				return structTag{}, fmt.Errorf("%w: duplicate tag option %q", ErrUnsupportedType, opt)
+			}
+			st.optional = true
+		default:
+			return structTag{}, fmt.Errorf("%w: unknown tag option %q", ErrUnsupportedType, opt)
+		}
+	}
+	if st.array && st.key {
+		return structTag{}, fmt.Errorf("%w: tag cannot combine array and key", ErrUnsupportedType)
+	}
+	return st, nil
+}
+
+// wantArray checks if a struct type has the cbor:"_,array" tag pattern and
+// rejects malformed cbor tags on any field.
+func wantArray(t reflect.Type) (bool, error) {
+	isArray := false
 	for i := range t.NumField() {
-		tag := t.Field(i).Tag.Get("cbor")
+		f := t.Field(i)
+		tag := f.Tag.Get("cbor")
 		if tag == "" {
 			continue
 		}
-		parts := strings.Split(tag, ",")
-		for _, part := range parts[1:] {
-			if part == "array" {
-				return true
+		st, err := parseTag(tag)
+		if err != nil {
+			return false, fmt.Errorf("%w (field %s)", err, f.Name)
+		}
+		if st.array {
+			if st.name != "" && st.name != "_" {
+				return false, fmt.Errorf("%w: field %s has array tag with key %q", ErrUnsupportedType, f.Name, st.name)
 			}
+			isArray = true
 		}
 	}
-	return false
+	return isArray, nil
 }
 
 // fieldInfo holds a struct field and its integer map key.
@@ -774,89 +833,87 @@ func collectMapFields(t reflect.Type, prefix []int, gs *ptrGroupState, visited m
 	var fields []fieldInfo
 	for i := range t.NumField() {
 		f := t.Field(i)
-		if f.PkgPath != "" { // unexported
-			continue
-		}
 		tag := f.Tag.Get("cbor")
+		if f.PkgPath != "" { // unexported
+			if tag != "" {
+				return nil, fmt.Errorf("%w: unexported field %s cannot carry a cbor tag", ErrUnsupportedType, f.Name)
+			}
+			continue
+		}
 		if tag == "" {
+			if !f.Anonymous {
+				return nil, fmt.Errorf("%w: field %s in map struct requires a cbor:\"N,key\" tag", ErrUnsupportedType, f.Name)
+			}
 			// Anonymous embedded struct field without a cbor tag: recurse into it.
-			if f.Anonymous {
-				embedType, ok := embeddedStructType(f.Type)
-				if !ok {
-					continue
-				}
-				if visited[embedType] {
-					return nil, fmt.Errorf("%w: recursive embed %s", ErrUnsupportedType, embedType.Name())
-				}
-				if wantArray(embedType) {
-					return nil, fmt.Errorf("%w: embedded field %s is array-mode", ErrUnsupportedType, f.Name)
-				}
-				visited[embedType] = true
-				inner := make([]int, len(prefix)+1)
-				copy(inner, prefix)
-				inner[len(prefix)] = i
-				prevID := gs.nextID
-				sub, err := collectMapFields(embedType, inner, gs, visited)
-				delete(visited, embedType)
-				if err != nil {
-					return nil, err
-				}
-				if len(sub) == 0 && len(structFields(embedType)) > 0 {
-					return nil, fmt.Errorf("%w: embedded field %s has no CBOR map keys", ErrUnsupportedType, f.Name)
-				}
-				// Pointer embeds (*T): nil pointer = all fields absent.
-				// Assign a group ID so decode can validate all-or-none.
-				// Only set the group on fields that don't already belong
-				// to a deeper (inner) pointer embed group. Inner groups
-				// created during the recursive call become children of
-				// this group in the hierarchy.
-				if f.Type.Kind() == reflect.Ptr {
-					gs.nextID++
-					group := gs.nextID
-					embedIdx := make([]int, len(inner))
-					copy(embedIdx, inner)
-					gs.embeds[group] = embedIdx
-					for childID := prevID + 1; childID < group; childID++ {
-						if _, ok := gs.parents[childID]; !ok {
-							gs.parents[childID] = group
-						}
-					}
-					for j := range sub {
-						if sub[j].ptrGroup == 0 {
-							sub[j].ptrGroup = group
-						}
+			embedType, ok := embeddedStructType(f.Type)
+			if !ok {
+				return nil, fmt.Errorf("%w: anonymous field %s is not a struct and requires a cbor:\"N,key\" tag", ErrUnsupportedType, f.Name)
+			}
+			if visited[embedType] {
+				return nil, fmt.Errorf("%w: recursive embed %s", ErrUnsupportedType, embedType.Name())
+			}
+			isArray, err := wantArray(embedType)
+			if err != nil {
+				return nil, err
+			}
+			if isArray {
+				return nil, fmt.Errorf("%w: embedded field %s is array-mode", ErrUnsupportedType, f.Name)
+			}
+			visited[embedType] = true
+			inner := make([]int, len(prefix)+1)
+			copy(inner, prefix)
+			inner[len(prefix)] = i
+			prevID := gs.nextID
+			sub, err := collectMapFields(embedType, inner, gs, visited)
+			delete(visited, embedType)
+			if err != nil {
+				return nil, err
+			}
+			if len(sub) == 0 && len(structFields(embedType)) > 0 {
+				return nil, fmt.Errorf("%w: embedded field %s has no CBOR map keys", ErrUnsupportedType, f.Name)
+			}
+			// Pointer embeds (*T): nil pointer = all fields absent.
+			// Assign a group ID so decode can validate all-or-none.
+			// Only set the group on fields that don't already belong
+			// to a deeper (inner) pointer embed group. Inner groups
+			// created during the recursive call become children of
+			// this group in the hierarchy.
+			if f.Type.Kind() == reflect.Ptr {
+				gs.nextID++
+				group := gs.nextID
+				embedIdx := make([]int, len(inner))
+				copy(embedIdx, inner)
+				gs.embeds[group] = embedIdx
+				for childID := prevID + 1; childID < group; childID++ {
+					if _, ok := gs.parents[childID]; !ok {
+						gs.parents[childID] = group
 					}
 				}
-				fields = append(fields, sub...)
+				for j := range sub {
+					if sub[j].ptrGroup == 0 {
+						sub[j].ptrGroup = group
+					}
+				}
 			}
+			fields = append(fields, sub...)
 			continue
 		}
-		parts := strings.Split(tag, ",")
-		hasKeyAsInt := false
-		optional := false
-		for _, part := range parts[1:] {
-			if part == "key" {
-				hasKeyAsInt = true
-			}
-			if part == "optional" {
-				optional = true
-			}
+		st, err := parseTag(tag)
+		if err != nil {
+			return nil, fmt.Errorf("%w (field %s)", err, f.Name)
 		}
-		if !hasKeyAsInt {
-			if f.Anonymous {
-				return nil, fmt.Errorf("%w: anonymous field %s has cbor tag but no integer key", ErrUnsupportedType, f.Name)
-			}
-			continue
+		if !st.key {
+			return nil, fmt.Errorf("%w: field %s has cbor tag without key", ErrUnsupportedType, f.Name)
 		}
 		// Parse the integer key from the first part
-		if parts[0] == "" || parts[0] == "_" {
+		if st.name == "" || st.name == "_" {
 			return nil, fmt.Errorf("%w: field %s has key but no integer key", ErrUnsupportedType, f.Name)
 		}
-		key, err := strconv.ParseInt(parts[0], 10, 64)
+		key, err := strconv.ParseInt(st.name, 10, 64)
 		if err != nil {
-			return nil, fmt.Errorf("%w: field %s has invalid key key %q", ErrUnsupportedType, f.Name, parts[0])
+			return nil, fmt.Errorf("%w: field %s has invalid key %q", ErrUnsupportedType, f.Name, st.name)
 		}
-		if optional && !isOptionalCapable(f.Type) {
+		if st.optional && !isOptionalCapable(f.Type) {
 			return nil, fmt.Errorf("%w: field %s is optional but type %s is not nilable (use *T, []T, or Option[T])", ErrUnsupportedType, f.Name, f.Type)
 		}
 		// Build full field index path for FieldByIndex navigation
@@ -864,7 +921,7 @@ func collectMapFields(t reflect.Type, prefix []int, gs *ptrGroupState, visited m
 		copy(fullIndex, prefix)
 		fullIndex[len(prefix)] = i
 		f.Index = fullIndex
-		fields = append(fields, fieldInfo{field: f, key: key, optional: optional})
+		fields = append(fields, fieldInfo{field: f, key: key, optional: st.optional})
 	}
 	return fields, nil
 }
@@ -919,28 +976,41 @@ type arrayFieldInfo struct {
 	optional bool
 }
 
-// arrayFields extracts fields from an array struct with their optional flags.
-func arrayFields(t reflect.Type) []arrayFieldInfo {
+// arrayFields extracts fields from an array struct with their optional flags,
+// rejecting misplaced or unknown cbor tags.
+func arrayFields(t reflect.Type) ([]arrayFieldInfo, error) {
 	var fields []arrayFieldInfo
 	for i := range t.NumField() {
 		f := t.Field(i)
-		if f.PkgPath != "" { // unexported
+		tag := f.Tag.Get("cbor")
+		if tag == "" {
+			if f.PkgPath == "" { // exported
+				fields = append(fields, arrayFieldInfo{field: f})
+			}
 			continue
 		}
-		tag := f.Tag.Get("cbor")
-		optional := false
-		if tag != "" {
-			parts := strings.Split(tag, ",")
-			for _, part := range parts[1:] {
-				if part == "optional" {
-					optional = true
-					break
-				}
-			}
+		st, err := parseTag(tag)
+		if err != nil {
+			return nil, fmt.Errorf("%w (field %s)", err, f.Name)
 		}
-		fields = append(fields, arrayFieldInfo{field: f, optional: optional})
+		if st.key {
+			return nil, fmt.Errorf("%w: key tag not allowed on array struct field %s", ErrUnsupportedType, f.Name)
+		}
+		if st.name != "" && st.name != "_" {
+			return nil, fmt.Errorf("%w: field %s has unexpected tag name %q in array struct", ErrUnsupportedType, f.Name, st.name)
+		}
+		if f.PkgPath != "" { // unexported
+			if !st.array || st.optional {
+				return nil, fmt.Errorf("%w: unexported field %s cannot carry tag %q", ErrUnsupportedType, f.Name, tag)
+			}
+			continue
+		}
+		if st.optional && !isOptionalCapable(f.Type) {
+			return nil, fmt.Errorf("%w: field %s is optional but type %s is not nilable (use *T, []T, or Option[T])", ErrUnsupportedType, f.Name, f.Type)
+		}
+		fields = append(fields, arrayFieldInfo{field: f, optional: st.optional})
 	}
-	return fields
+	return fields, nil
 }
 
 // isOptionalNil reports whether an optional field's value is nil/None and should

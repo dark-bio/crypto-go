@@ -20,6 +20,9 @@ import (
 // followed by additional unconsumed bytes.
 var ErrTrailingData = errors.New("asn1ext: trailing data")
 
+// ErrInvalidBitString is returned when an SPKI public key has an invalid BIT STRING.
+var ErrInvalidBitString = errors.New("asn1ext: invalid public key bit string")
+
 // PKCS8PrivateKey is the ASN.1 structure for PKCS#8 private keys.
 type PKCS8PrivateKey struct {
 	Version    int
@@ -114,26 +117,18 @@ func ParseSubjectPublicKeyInfo(der []byte) (*SubjectPublicKeyInfo, error) {
 	params := asn1.RawValue{FullBytes: []byte(algSeq)}
 
 	// Parse the BIT STRING containing the public key
-	var bitString cryptobyte.String
-	if !inner.ReadASN1(&bitString, cbasn1.BIT_STRING) {
-		return nil, errors.New("asn1ext: invalid public key encoding")
+	var bitString asn1.BitString
+	if !inner.ReadASN1BitString(&bitString) {
+		return nil, ErrInvalidBitString
 	}
 	if !inner.Empty() {
 		return nil, ErrTrailingData
 	}
-	if len(bitString) < 1 {
-		return nil, errors.New("asn1ext: empty bit string")
-	}
-	// First byte indicates the number of unused bits in the final octet
-	paddingBits := int(bitString[0])
 	return &SubjectPublicKeyInfo{
 		Algorithm: pkix.AlgorithmIdentifier{
 			Algorithm:  oid,
 			Parameters: params,
 		},
-		SubjectPublicKey: asn1.BitString{
-			Bytes:     bitString[1:],
-			BitLength: (len(bitString)-1)*8 - paddingBits,
-		},
+		SubjectPublicKey: bitString,
 	}, nil
 }
