@@ -36,13 +36,13 @@ var (
 	ErrMissingNbf = errors.New("cwt: missing nbf claim")
 
 	// ErrNotYetValid is returned by Verify when the token's nbf lies after the
-	// time of the check. The wrapping error names both, in seconds since the
-	// Unix epoch.
+	// time of the check. The wrapping error states both timestamps in seconds
+	// since the Unix epoch.
 	ErrNotYetValid = errors.New("cwt: token not yet valid")
 
 	// ErrAlreadyExpired is returned by Verify when the token's exp is at or
-	// before the time of the check. The wrapping error names both, in seconds
-	// since the Unix epoch.
+	// before the time of the check. The wrapping error states both timestamps
+	// in seconds since the Unix epoch.
 	ErrAlreadyExpired = errors.New("cwt: token already expired")
 
 	// ErrDuplicateKey is returned by Verify when the claims map carries a

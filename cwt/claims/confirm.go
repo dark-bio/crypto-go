@@ -19,11 +19,11 @@ import (
 // Errors returned by confirmation key operations.
 var (
 	// ErrInvalidKeyType is returned when decoding a cnf claim whose COSE key
-	// type does not match the requested key type. The wrapping error names both.
+	// type does not match the requested key type. The wrapping error states both.
 	ErrInvalidKeyType = errors.New("claims: unexpected key type")
 
 	// ErrInvalidKeySize is returned when decoding a cnf claim whose key bytes
-	// have the wrong size for the requested key type. The wrapping error names
+	// have the wrong size for the requested key type. The wrapping error states
 	// both sizes.
 	ErrInvalidKeySize = errors.New("claims: unexpected key size")
 )
@@ -59,7 +59,7 @@ func (c *Confirm[T]) Key() T {
 // confirmValue wraps a public key with CBOR encoding that produces the
 // RFC 8747 confirmation key nesting.
 type confirmValue[T ConfirmKey] struct {
-	key T
+	key T // bound public key
 }
 
 // MarshalCBOR implements cbor.Marshaler.
@@ -131,13 +131,13 @@ func (c *confirmValue[T]) UnmarshalCBOR(dec *cbor.Decoder) error {
 
 // cnfMap is the outer structure of a cnf claim value: { 1: COSE_Key }.
 type cnfMap struct {
-	CoseKey coseKey `cbor:"1,key"`
+	CoseKey coseKey `cbor:"1,key"` // wrapped COSE_Key map
 }
 
 // coseKey is a minimal COSE_Key: { 1: kty, -2: x }. Parameter -2 carries
 // the full public key bytes, following the OKP convention (RFC 9053 Section 7.2)
 // where -2 means "public key" rather than the EC2 "x-coordinate" meaning.
 type coseKey struct {
-	Kty int64  `cbor:"1,key"`
-	X   []byte `cbor:"-2,key"`
+	Kty int64  `cbor:"1,key"`  // COSE key type identifier
+	X   []byte `cbor:"-2,key"` // raw public key bytes
 }

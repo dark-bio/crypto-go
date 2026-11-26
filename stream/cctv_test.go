@@ -21,11 +21,11 @@ import (
 	"github.com/dark-bio/crypto-go/stream"
 )
 
-// Tests the STREAM implementation against the C2SP CCTV age testkit vectors,
-// vendored at commit 1e3d2860d46e94e777e1b17c7a6f2436387e3ecc: success
-// vectors must decrypt fully to the expected payload hash and re-encrypt
-// byte for byte; failure vectors must error with only the expected prefix
-// released.
+// TestCCTVVectors checks STREAM encryption and decryption against the C2SP
+// CCTV age testkit vectors vendored at commit
+// 1e3d2860d46e94e777e1b17c7a6f2436387e3ecc. Success vectors must decrypt to
+// the expected payload hash and re-encrypt identically; failure vectors must
+// error after releasing only the expected prefix.
 //
 // https://github.com/C2SP/CCTV/tree/main/age
 func TestCCTVVectors(t *testing.T) {
@@ -102,7 +102,7 @@ func TestCCTVVectors(t *testing.T) {
 			}
 			if hdr["expect"] == "success" {
 				// Decryption must succeed and re-encrypting the recovered
-				// plaintext must reproduce the ciphertext byte for byte
+				// plaintext must reproduce the ciphertext identically
 				if rerr != nil {
 					t.Fatalf("failed to decrypt: %v", rerr)
 				}

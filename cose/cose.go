@@ -136,10 +136,10 @@ var (
 
 // sigProtectedHeader is the protected header for COSE_Sign1.
 type sigProtectedHeader struct {
-	Algorithm int64            `cbor:"1,key"`
-	Crit      critHeader       `cbor:"2,key"`
-	Kid       xdsa.Fingerprint `cbor:"4,key"`
-	Timestamp int64            `cbor:"-70002,key"`
+	Algorithm int64            `cbor:"1,key"`      // COSE algorithm identifier
+	Crit      critHeader       `cbor:"2,key"`      // critical header labels
+	Kid       xdsa.Fingerprint `cbor:"4,key"`      // signer key fingerprint
+	Timestamp int64            `cbor:"-70002,key"` // signature Unix timestamp in seconds
 }
 
 // critHeader lists the critical headers that must be understood.
@@ -151,16 +151,16 @@ type critHeader struct {
 
 // encProtectedHeader is the protected header for COSE_Encrypt0.
 type encProtectedHeader struct {
-	Algorithm int64             `cbor:"1,key"`
-	Kid       xhpke.Fingerprint `cbor:"4,key"`
+	Algorithm int64             `cbor:"1,key"` // COSE algorithm identifier
+	Kid       xhpke.Fingerprint `cbor:"4,key"` // recipient key fingerprint
 }
 
-// emptyHeader is an empty unprotected header map (for COSE_Sign1).
+// emptyHeader is an empty unprotected header map for COSE_Sign1.
 type emptyHeader struct{}
 
-// encapKeyHeader contains the encapsulated key (for COSE_Encrypt0).
+// encapKeyHeader contains the encapsulated key for COSE_Encrypt0.
 type encapKeyHeader struct {
-	EncapKey []byte `cbor:"-4,key"`
+	EncapKey []byte `cbor:"-4,key"` // X-Wing encapsulated key
 }
 
 // coseSign1 is the COSE_Sign1 structure per RFC 9052 Section 4.2.
@@ -172,11 +172,11 @@ type encapKeyHeader struct {
 //	    signature:   bstr
 //	]
 type coseSign1 struct {
-	_           struct{} `cbor:"_,array"`
-	Protected   []byte
-	Unprotected emptyHeader
-	Payload     []byte `cbor:"_,optional"` // nil for detached payload (encodes as null per RFC 9052)
-	Signature   xdsa.Signature
+	_           struct{}       `cbor:"_,array"`
+	Protected   []byte         // CBOR-encoded protected header
+	Unprotected emptyHeader    // empty unprotected header map
+	Payload     []byte         `cbor:"_,optional"` // nil for detached payload (encodes as null per RFC 9052)
+	Signature   xdsa.Signature // composite xDSA signature
 }
 
 // clearPayload wipes the decoded payload, including one read before a decode error.
@@ -192,10 +192,10 @@ func (s *coseSign1) clearPayload() {
 //	    ciphertext:  bstr
 //	]
 type coseEncrypt0 struct {
-	_           struct{} `cbor:"_,array"`
-	Protected   []byte
-	Unprotected encapKeyHeader
-	Ciphertext  []byte
+	_           struct{}       `cbor:"_,array"`
+	Protected   []byte         // CBOR-encoded protected header
+	Unprotected encapKeyHeader // X-Wing encapsulated key header
+	Ciphertext  []byte         // HPKE-encrypted ciphertext
 }
 
 // sigStructure is the Sig_structure for computing signatures per RFC 9052 Section 4.4.
@@ -208,10 +208,10 @@ type coseEncrypt0 struct {
 //	]
 type sigStructure struct {
 	_           struct{} `cbor:"_,array"`
-	Context     string
-	Protected   []byte
-	ExternalAAD []byte
-	Payload     []byte
+	Context     string   // COSE signing context ("Signature1")
+	Protected   []byte   // CBOR-encoded protected header
+	ExternalAAD []byte   // CBOR-encoded external AAD
+	Payload     []byte   // payload bytes, or empty for detached mode
 }
 
 // encStructure is the Enc_structure for computing AAD per RFC 9052 Section 5.3.
@@ -223,16 +223,16 @@ type sigStructure struct {
 //	]
 type encStructure struct {
 	_           struct{} `cbor:"_,array"`
-	Context     string
-	Protected   []byte
-	ExternalAAD []byte
+	Context     string   // COSE encryption context ("Encrypt0")
+	Protected   []byte   // CBOR-encoded protected header
+	ExternalAAD []byte   // CBOR-encoded external AAD
 }
 
 // sigAAD wraps the domain info and message-to-auth for signing operations.
 type sigAAD struct {
 	_         struct{} `cbor:"_,array"`
-	Info      []byte
-	MsgToAuth cbor.Raw
+	Info      []byte   // DomainPrefix concatenated with caller domain
+	MsgToAuth cbor.Raw // pre-encoded authenticated message
 }
 
 // SignDetached creates a COSE_Sign1 digital signature without an embedded

@@ -20,9 +20,9 @@ import (
 )
 
 var (
-	pemHeader = []byte("-----BEGIN ")
-	pemFooter = []byte("-----END ")
-	pemEnding = []byte("-----")
+	pemHeader = []byte("-----BEGIN ") // opens a PEM header line
+	pemFooter = []byte("-----END ")   // opens a PEM footer line
+	pemEnding = []byte("-----")       // closes a PEM header or footer line
 )
 
 var (
@@ -31,10 +31,10 @@ var (
 	ErrMissingHeader = errors.New("pem: missing PEM header")
 
 	// ErrMalformedHeader is returned when the first line is not a complete
-	// "-----BEGIN TYPE-----" header. The wrapping error says what is missing.
+	// "-----BEGIN TYPE-----" header. The wrapping error states what is missing.
 	ErrMalformedHeader = errors.New("pem: malformed PEM header")
 
-	// ErrEmptyBlockType is returned when the header names no block type.
+	// ErrEmptyBlockType is returned when the header omits the block type.
 	ErrEmptyBlockType = errors.New("pem: empty PEM block type")
 
 	// ErrMalformedBlockType is returned for invalid label characters or spacing.
@@ -49,13 +49,12 @@ var (
 	ErrTrailingData = errors.New("pem: trailing data after PEM block")
 
 	// ErrMalformedBody is returned when the body between header and footer is
-	// empty, contains a blank line, or does not end in a line ending. The
-	// wrapping error says which.
+	// empty, contains a blank line, or does not end with a line ending. The
+	// wrapping error states which.
 	ErrMalformedBody = errors.New("pem: malformed PEM body")
 
 	// ErrMalformedPayload is returned when the body is not strict base64, or a
-	// line ends differently from the header. The wrapping error names the
-	// reason.
+	// line ending differs from the header. The wrapping error states the reason.
 	ErrMalformedPayload = errors.New("pem: malformed base64 payload")
 )
 
@@ -130,14 +129,14 @@ func Decode(data []byte) (kind string, blob []byte, err error) {
 	footerStart := headerEnd + 1 + footerIdx
 	footerEnd := footerStart + len(footer)
 
-	// Validate what comes after footer: nothing or same line ending
+	// Allow only an optional final line ending matching the header
 	rest := data[footerEnd:]
 	if len(rest) > 0 {
 		if !bytes.Equal(rest, lineEnding) {
 			return "", nil, ErrTrailingData
 		}
 	}
-	// Extract body (between header and footer)
+	// Extract the body between header and footer
 	body := data[headerEnd+1 : footerStart]
 
 	if len(body) == 0 {
@@ -163,9 +162,8 @@ func Decode(data []byte) (kind string, blob []byte, err error) {
 	return blockType, decoded, nil
 }
 
-// Encode encodes data as a PEM block with the given type.
-// Lines are 64 characters, using \n line endings. It panics if blob is empty
-// or kind is an invalid block label.
+// Encode encodes blob as a PEM block with 64-character lines and \n endings.
+// It panics if blob is empty or kind is an invalid block label.
 func Encode(kind string, blob []byte) []byte {
 	if len(blob) == 0 {
 		panic("pem: empty payload")

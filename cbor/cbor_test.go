@@ -813,8 +813,7 @@ func TestRawDecoding(t *testing.T) {
 	if !bytes.Equal(decoded.Params, []byte{0x82, 0x01, 0x63, 0x61, 0x72, 0x67}) {
 		t.Errorf("Params: got %x, want 82016361726", decoded.Params)
 	}
-	// Null (regression: pointer-level null check previously short-circuited
-	// before reaching the Raw handler, causing Unmarshal into *Raw to fail)
+	// Decode CBOR null directly into *Raw
 	raw = nil
 	if err := Unmarshal([]byte{0xf6}, &raw); err != nil {
 		t.Fatalf("Raw decode null error: %v", err)
@@ -849,14 +848,14 @@ func TestRawRejection(t *testing.T) {
 		t.Errorf("Expected ErrUnsupportedType, got %v", err)
 	}
 
-	// Major type 7 (bools/null) - now supported, floats still unsupported
+	// Major type 7 booleans and null are supported
 	boolData := []byte{0xf5} // true
 	err = Unmarshal(boolData, &raw)
 	if err != nil {
 		t.Errorf("Raw should accept bool data, got %v", err)
 	}
 
-	// Float16 is still unsupported
+	// Float16 is unsupported
 	floatData := []byte{0xf9, 0x3c, 0x00}
 	err = Unmarshal(floatData, &raw)
 	if err == nil {
@@ -936,7 +935,7 @@ func TestVerify(t *testing.T) {
 		t.Errorf("Verify tagged: expected ErrUnsupportedType, got %v", err)
 	}
 
-	// Booleans and null are now supported
+	// Booleans and null are supported
 	for _, tc := range []struct {
 		name string
 		data []byte
@@ -950,7 +949,7 @@ func TestVerify(t *testing.T) {
 		}
 	}
 
-	// Floats and undefined are still unsupported
+	// Floats and undefined are unsupported
 	for _, tc := range []struct {
 		name string
 		data []byte
@@ -2694,10 +2693,9 @@ func (c *customValue) UnmarshalCBOR(dec *Decoder) error {
 	return nil
 }
 
-// Tests that a pointer-receiver Marshaler on a struct field works identically
-// whether the top-level value is passed by value or by pointer. Before the fix,
-// passing by value made the field non-addressable, causing the pointer-receiver
-// MarshalCBOR to be silently skipped and the unexported field to be lost.
+// TestMarshalerPointerReceiver checks that a pointer-receiver Marshaler on a
+// struct field works identically whether the top-level value is passed by value
+// or by pointer.
 func TestMarshalerPointerReceiver(t *testing.T) {
 	type Outer struct {
 		Name  string      `cbor:"1,key"`

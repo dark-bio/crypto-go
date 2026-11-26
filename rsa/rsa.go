@@ -4,14 +4,14 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package rsa provides RSA-2048-SHA256 signing and verification.
+// Package rsa provides RSA-2048-SHA-256 signing and verification.
 //
 // https://datatracker.ietf.org/doc/html/rfc8017
 //
 // RSA-2048 with PKCS#1 v1.5 padding over SHA-256, the classical scheme kept
-// for places where a boot ROM or a legacy system dictates it. New designs
-// should use the xdsa package. Only 2048-bit moduli with the exponent 65537
-// are accepted, and encryption is deliberately not exposed.
+// for places where a boot ROM or a legacy system requires it. New designs
+// should use the xdsa package. Only 2048-bit moduli with exponent 65537 are
+// accepted, and encryption is deliberately not exposed.
 package rsa
 
 import (
@@ -61,19 +61,18 @@ var (
 	// ErrMalformedKey is returned by every key parser when the key cannot be
 	// parsed or its contents are unusable. Causes include a modulus that is not
 	// 2048 bits, an exponent other than 65537, primes that are not both 1024
-	// bits or a non-canonical encoding. The wrapping error names the problem.
+	// bits, or a non-canonical encoding. The wrapping error states the problem.
 	ErrMalformedKey = errors.New("rsa: malformed key")
 
 	// ErrInvalidSignature is returned by PublicKey.Verify and PublicKey.VerifyHash
 	// when the signature does not verify under the key for the message or hash,
-	// or it is not a well formed RSA-2048 signature at all.
+	// or is not a valid RSA-2048 signature.
 	ErrInvalidSignature = errors.New("rsa: signature verification failed")
 )
 
-// SecretKey contains a 2048-bit RSA private key usable for signing, with SHA256
-// as the underlying hash algorithm.
+// SecretKey contains a 2048-bit RSA private key usable for signing with SHA-256.
 type SecretKey struct {
-	inner *rsa.PrivateKey
+	inner *rsa.PrivateKey // underlying standard library RSA private key
 }
 
 // GenerateKey creates a new, random private key.
@@ -104,9 +103,7 @@ func ParseSecretKey(b [SecretKeySize]byte) (*SecretKey, error) {
 	if n.Bit(0) == 0 {
 		return nil, fmt.Errorf("%w: modulus must be odd", ErrMalformedKey)
 	}
-	// Whilst the RSA algorithm permits different exponents, every modern
-	// system only ever uses 65537 and most also enforce this. Might as
-	// well do the same.
+	// Restrict the public exponent to 65537, the standard value across modern systems
 	if e.Cmp(big.NewInt(65537)) != 0 {
 		return nil, fmt.Errorf("%w: exponent must be 65537", ErrMalformedKey)
 	}
@@ -155,9 +152,7 @@ func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 	if rsaKey.N.Bit(0) == 0 {
 		return nil, fmt.Errorf("%w: modulus must be odd", ErrMalformedKey)
 	}
-	// Whilst the RSA algorithm permits different exponents, every modern
-	// system only ever uses 65537 and most also enforce this. Might as
-	// well do the same.
+	// Restrict the public exponent to 65537, the standard value across modern systems
 	if rsaKey.E != 65537 {
 		return nil, fmt.Errorf("%w: exponent must be 65537", ErrMalformedKey)
 	}
@@ -168,10 +163,8 @@ func ParseSecretKeyDER(der []byte) (*SecretKey, error) {
 			return nil, fmt.Errorf("%w: primes must be 1024 bits", ErrMalformedKey)
 		}
 	}
-	// Go's ASN1 parser permits unused trailing bytes, which may end up with a
-	// weird interplay with the optional RSA CRT parameters (junk ignored). We
-	// don't want to allow that, so just round trip the format and see if it's
-	// matching or not.
+	// Re-encode to reject trailing bytes or non-canonical CRT fields accepted by
+	// Go's ASN.1 parser
 	recoded, err := x509.MarshalPKCS8PrivateKey(rsaKey)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrMalformedKey, err)
@@ -255,14 +248,14 @@ func (k *SecretKey) PublicKey() *PublicKey {
 	return &PublicKey{inner: &k.inner.PublicKey}
 }
 
-// Fingerprint returns a 256-bit unique identifier for this key. For RSA, that
-// is the SHA256 hash of the raw (le modulus || le exponent) public key.
+// Fingerprint returns a 256-bit unique identifier for this key, computed as
+// the SHA-256 hash of the little-endian modulus and little-endian exponent.
 func (k *SecretKey) Fingerprint() Fingerprint {
 	return k.PublicKey().Fingerprint()
 }
 
-// Sign creates a digital signature of the message using PKCS#1 v1.5. This call
-// will never return an error, the type is there for composability.
+// Sign creates a PKCS#1 v1.5 digital signature of the message. It never returns
+// an error; the error return is present for interface composability.
 func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 	hash := sha256.Sum256(message)
 	sig, err := rsa.SignPKCS1v15(rand.Reader, k.inner, crypto.SHA256, hash[:])
@@ -272,15 +265,15 @@ func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 	return (*Signature)(sig), nil
 }
 
-// PublicKey contains a 2048-bit RSA public key usable for verification, with
-// SHA256 as the underlying hash algorithm.
+// PublicKey contains a 2048-bit RSA public key usable for verification with
+// SHA-256.
 //
 // The zero value is not a valid key, and using it panics. JSON decoding rejects
-// null, but a field missing from the input keeps the zero value without an
+// null, while a field missing from the input keeps the zero value without
 // error. To detect a missing key, decode into a *PublicKey field and check it
 // for nil.
 type PublicKey struct {
-	inner *rsa.PublicKey
+	inner *rsa.PublicKey // underlying standard library RSA public key
 }
 
 // ParsePublicKey parses a 264-byte array into a public key.
@@ -302,9 +295,7 @@ func ParsePublicKey(b [PublicKeySize]byte) (*PublicKey, error) {
 	if n.Bit(0) == 0 {
 		return nil, fmt.Errorf("%w: modulus must be odd", ErrMalformedKey)
 	}
-	// Whilst the RSA algorithm permits different exponents, every modern
-	// system only ever uses 65537 and most also enforce this. Might as
-	// well do the same.
+	// Restrict the public exponent to 65537, the standard value across modern systems
 	if e.Cmp(big.NewInt(65537)) != 0 {
 		return nil, fmt.Errorf("%w: exponent must be 65537", ErrMalformedKey)
 	}
@@ -344,9 +335,7 @@ func ParsePublicKeyDER(der []byte) (*PublicKey, error) {
 	if rsaKey.N.Bit(0) == 0 {
 		return nil, fmt.Errorf("%w: modulus must be odd", ErrMalformedKey)
 	}
-	// Whilst the RSA algorithm permits different exponents, every modern
-	// system only ever uses 65537 and most also enforce this. Might as
-	// well do the same.
+	// Restrict the public exponent to 65537, the standard value across modern systems
 	if rsaKey.E != 65537 {
 		return nil, fmt.Errorf("%w: exponent must be 65537", ErrMalformedKey)
 	}
@@ -441,8 +430,8 @@ func (k *PublicKey) UnmarshalJSON(data []byte) error {
 	return jsonext.UnmarshalText(data, k)
 }
 
-// Fingerprint returns a 256-bit unique identifier for this key. For RSA, that
-// is the SHA256 hash of the raw (le modulus || le exponent) public key.
+// Fingerprint returns a 256-bit unique identifier for this key, computed as
+// the SHA-256 hash of the little-endian modulus and little-endian exponent.
 func (k *PublicKey) Fingerprint() Fingerprint {
 	modLE := reverseBytes(k.inner.N.Bytes())
 	for len(modLE) < 256 {
@@ -545,6 +534,7 @@ func (f *Fingerprint) UnmarshalJSON(data []byte) error {
 	return jsonext.UnmarshalText(data, f)
 }
 
+// reverseBytes returns a reversed copy of b.
 func reverseBytes(b []byte) []byte {
 	out := make([]byte, len(b))
 	for i := range b {

@@ -29,5 +29,5 @@ func (v *SWVersion) Version() string {
 // Section 4.2.7: [version: tstr]. The optional scheme is not supported.
 type swVersionValue struct {
 	_       struct{} `cbor:"_,array"`
-	Version string
+	Version string   // software revision string
 }

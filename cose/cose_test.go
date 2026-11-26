@@ -17,18 +17,21 @@ import (
 	"github.com/dark-bio/crypto-go/xhpke"
 )
 
+// testPayload is a sample CBOR array payload used in COSE tests.
 type testPayload struct {
 	_   struct{} `cbor:"_,array"`
-	Num uint64
-	Str string
+	Num uint64   // numeric test field
+	Str string   // string test field
 }
 
+// testAAD is a sample CBOR array authenticated data payload used in COSE tests.
 type testAAD struct {
 	_   struct{} `cbor:"_,array"`
-	Str string
+	Str string   // string test field
 }
 
-// Tests various combinations of signing and verifying ops.
+// TestSignVerify checks embedded signing and verification across valid and
+// failing cases.
 func TestSignVerify(t *testing.T) {
 	now := time.Now().Unix()
 
@@ -192,7 +195,7 @@ func TestSignVerify(t *testing.T) {
 	}
 }
 
-// Tests various combinations of sealing and opening ops.
+// TestSealOpen checks sealing and opening across valid and failing cases.
 func TestSealOpen(t *testing.T) {
 	now := time.Now().Unix()
 
@@ -357,7 +360,7 @@ func TestSealOpen(t *testing.T) {
 	}
 }
 
-// Tests detached signing and verification.
+// TestSignVerifyDetached checks detached signing and verification.
 func TestSignVerifyDetached(t *testing.T) {
 	alice := xdsa.GenerateKey()
 	bobby := xdsa.GenerateKey()
@@ -401,8 +404,8 @@ func (s failingSigner) PublicKey() *xdsa.PublicKey {
 	return s.key.PublicKey()
 }
 
-// Tests that a signer's error is returned by every signing entry point instead
-// of crashing on the missing signature.
+// TestSignerErrorPropagates checks that a signer error is returned by every
+// signing entry point instead of panicking on the missing signature.
 func TestSignerErrorPropagates(t *testing.T) {
 	signer := failingSigner{key: xdsa.GenerateKey()}
 	recipient := xhpke.GenerateKey().PublicKey()
@@ -423,11 +426,15 @@ func TestSignerErrorPropagates(t *testing.T) {
 	}
 }
 
-func ptr(v int64) *int64    { return &v }
+// ptr returns a pointer to v.
+func ptr(v int64) *int64 { return &v }
+
+// uptr returns a pointer to v.
 func uptr(v uint64) *uint64 { return &v }
 
-// Tests that the drift check measures the true distance between timestamps at
-// opposite ends of the int64 range, for embedded and detached signatures.
+// TestDriftRange checks that drift validation measures the true distance
+// between timestamps at opposite ends of int64 for embedded and detached
+// signatures.
 func TestDriftRange(t *testing.T) {
 	signer := xdsa.GenerateKey()
 	tests := []struct {

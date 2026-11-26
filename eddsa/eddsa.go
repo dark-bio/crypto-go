@@ -61,8 +61,8 @@ var (
 
 	// ErrMalformedKey is returned by the fallible key constructors when a key
 	// encoding cannot be parsed or its contents are unusable. Causes include a
-	// seed or point of the wrong size, an invalid curve point or unexpected
-	// algorithm parameters. The wrapping error names the problem.
+	// seed or point of the wrong size, an invalid curve point, or unexpected
+	// algorithm parameters. The wrapping error states the problem.
 	ErrMalformedKey = errors.New("eddsa: malformed key")
 
 	// ErrTrailingData is returned by the DER parsers, and through them by the
@@ -76,7 +76,7 @@ var (
 
 // SecretKey contains an Ed25519 private key usable for signing.
 type SecretKey struct {
-	key ed25519.PrivateKey
+	key ed25519.PrivateKey // underlying standard library Ed25519 private key
 }
 
 // GenerateKey creates a new, random private key.
@@ -187,8 +187,8 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 	return k.PublicKey().Fingerprint()
 }
 
-// Sign creates a digital signature of the message. This call will never return
-// an error, the type is there for composability.
+// Sign creates a digital signature of the message. It never returns an error;
+// the error return is present for Signer interface composability.
 func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 	sig := ed25519.Sign(k.key, message)
 	return (*Signature)(sig), nil
@@ -196,11 +196,11 @@ func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 
 // PublicKey contains an Ed25519 public key usable for verification.
 //
-// The zero value is not a valid key. JSON decoding rejects null, but a field
-// missing from the input keeps the zero value without an error. To detect a
+// The zero value is not a valid key. JSON decoding rejects null, while a field
+// missing from the input keeps the zero value without error. To detect a
 // missing key, decode into a *PublicKey field and check it for nil.
 type PublicKey struct {
-	key ed25519.PublicKey
+	key ed25519.PublicKey // underlying standard library Ed25519 public key
 }
 
 // ParsePublicKey converts a 32-byte array into a public key.

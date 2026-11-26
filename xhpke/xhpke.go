@@ -74,8 +74,8 @@ var (
 	// ErrMalformedKey is returned by the fallible key constructors when a key
 	// encoding cannot be parsed or its contents are unusable. Causes include a
 	// wrong size, an ML-KEM coefficient out of range, unexpected algorithm
-	// parameters or an unsupported PKCS#8 version. The wrapping error names the
-	// problem.
+	// parameters, or an unsupported PKCS#8 version. The wrapping error states
+	// the problem.
 	ErrMalformedKey = errors.New("xhpke: malformed key")
 
 	// ErrTrailingData is returned by the DER parsers, and through them by the
@@ -89,16 +89,16 @@ var (
 
 	// ErrOpenFailed is returned by SecretKey.Open, SecretKey.NewReceiver and
 	// Receiver.Open when decrypting fails. Causes include a malformed
-	// encapsulated key, the wrong secret key, a tampered ciphertext or a
+	// encapsulated key, the wrong secret key, a tampered ciphertext, or a
 	// mismatched authenticated message. The wrapping error carries the HPKE
-	// error text, which does not tell these apart.
+	// error text, which does not distinguish these causes.
 	ErrOpenFailed = errors.New("xhpke: opening failed")
 )
 
 // SecretKey contains an X-Wing private key for decrypting HPKE messages.
 type SecretKey struct {
-	inner hpke.PrivateKey
-	seed  [SecretKeySize]byte
+	inner hpke.PrivateKey     // underlying standard library HPKE private key
+	seed  [SecretKeySize]byte // 32-byte key generation seed
 }
 
 // GenerateKey creates a new, random private key.
@@ -232,12 +232,11 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 	return k.PublicKey().Fingerprint()
 }
 
-// Open consumes a standalone cryptographic construct encrypted to this secret
-// key. The method will deconstruct the given encapsulated key and ciphertext
-// and will also verify the authenticity of the (unencrypted) message-to-auth
-// (not included in the ciphertext).
+// Open decrypts a single-shot HPKE message encrypted to this secret key and
+// verifies the authenticity of msgToAuth, which is not included in the
+// ciphertext.
 //
-// Note: X-Wing uses Base mode (no sender authentication). The sender's identity
+// X-Wing uses Base mode without sender authentication, so the sender's identity
 // cannot be verified from the ciphertext alone.
 func (k *SecretKey) Open(sessionKey *[EncapKeySize]byte, msgToOpen, msgToAuth, domain []byte) ([]byte, error) {
 	// Restrict the user's domain to the context of this library
@@ -266,7 +265,7 @@ func (k *SecretKey) Open(sessionKey *[EncapKeySize]byte, msgToOpen, msgToAuth, d
 // using the given encapsulated key. Messages must be decrypted in the same
 // order they were encrypted by the corresponding sender.
 //
-// Note: X-Wing uses Base mode (no sender authentication). The sender's identity
+// X-Wing uses Base mode without sender authentication, so the sender's identity
 // cannot be verified from the context alone.
 func (k *SecretKey) NewReceiver(sessionKey *[EncapKeySize]byte, domain []byte) (*Receiver, error) {
 	// Restrict the user's domain to the context of this library
@@ -288,11 +287,11 @@ func (k *SecretKey) NewReceiver(sessionKey *[EncapKeySize]byte, domain []byte) (
 // PublicKey contains an X-Wing public key for encrypting HPKE messages.
 //
 // The zero value is not a valid key, and using it panics. JSON decoding rejects
-// null, but a field missing from the input keeps the zero value without an
+// null, while a field missing from the input keeps the zero value without
 // error. To detect a missing key, decode into a *PublicKey field and check it
 // for nil.
 type PublicKey struct {
-	inner hpke.PublicKey
+	inner hpke.PublicKey // underlying standard library HPKE public key
 }
 
 // ParsePublicKey converts a 1216-byte array into a public key.
@@ -491,22 +490,19 @@ func (f *Fingerprint) UnmarshalJSON(data []byte) error {
 	return jsonext.UnmarshalText(data, f)
 }
 
-// Seal creates a standalone cryptographic construct encrypted to this public
-// key. The construct will contain the given message-to-seal (encrypted) and
-// also an authenticity proof for the (unencrypted) message-to-auth (message
-// not included).
+// Seal encrypts msgToSeal to this public key and authenticates msgToAuth
+// without including msgToAuth in the ciphertext.
 //
-// The method returns the encapsulated session key and the ciphertext separately.
-// Opening it on the other side with SecretKey.Open needs both components along
-// with msgToAuth.
+// It returns the encapsulated session key and the ciphertext separately.
+// SecretKey.Open requires both components along with msgToAuth.
 //
-// Note: X-Wing uses Base mode (no sender authentication). The recipient cannot
+// X-Wing uses Base mode without sender authentication, so the recipient cannot
 // verify the sender's identity from the ciphertext alone.
 func (k *PublicKey) Seal(msgToSeal, msgToAuth, domain []byte) ([EncapKeySize]byte, []byte, error) {
 	// Restrict the user's domain to the context of this library
 	info := append([]byte(DomainPrefix), domain...)
 
-	// Create a sender session using Base mode (X-Wing doesn't support Auth mode)
+	// Create a sender session using Base mode (X-Wing does not support Auth mode)
 	encapKey, sender, err := hpke.NewSender(
 		k.inner,
 		hpke.HKDFSHA256(),
@@ -516,7 +512,7 @@ func (k *PublicKey) Seal(msgToSeal, msgToAuth, domain []byte) ([EncapKeySize]byt
 	if err != nil {
 		return [EncapKeySize]byte{}, nil, fmt.Errorf("%w: %v", ErrSealFailed, err)
 	}
-	// Encrypt the messages and seal all the crypto details into a nice box
+	// Encrypt the payload and authenticate msgToAuth
 	enc, err := sender.Seal(msgToAuth, msgToSeal)
 	if err != nil {
 		return [EncapKeySize]byte{}, nil, fmt.Errorf("%w: %v", ErrSealFailed, err)
@@ -527,13 +523,13 @@ func (k *PublicKey) Seal(msgToSeal, msgToAuth, domain []byte) ([EncapKeySize]byt
 }
 
 // NewSender creates an HPKE sender context for multi-message encryption to this
-// public key. Returns the sender context and the encapsulated key that must be
-// transmitted to the recipient.
+// public key. It returns the sender context and the encapsulated key to transmit
+// to the recipient.
 //
 // Messages encrypted with the returned context must be decrypted in order by the
 // corresponding receiver context.
 //
-// Note: X-Wing uses Base mode (no sender authentication). The recipient cannot
+// X-Wing uses Base mode without sender authentication, so the recipient cannot
 // verify the sender's identity from the context alone.
 func (k *PublicKey) NewSender(domain []byte) (*Sender, [EncapKeySize]byte, error) {
 	// Restrict the user's domain to the context of this library
@@ -560,7 +556,7 @@ func (k *PublicKey) NewSender(domain []byte) (*Sender, [EncapKeySize]byte, error
 // Messages must be provided in the same order they were sealed by the
 // corresponding Sender.
 type Receiver struct {
-	inner *hpke.Recipient
+	inner *hpke.Recipient // underlying standard library HPKE recipient context
 }
 
 // Open decrypts a message using the next nonce in the sequence.
@@ -579,7 +575,7 @@ func (c *Receiver) Open(msgToOpen, msgToAuth []byte) ([]byte, error) {
 // The corresponding Receiver must process messages in the same order they
 // were sealed.
 type Sender struct {
-	inner *hpke.Sender
+	inner *hpke.Sender // underlying standard library HPKE sender context
 }
 
 // Seal encrypts a message using the next nonce in the sequence.

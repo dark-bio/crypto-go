@@ -29,5 +29,5 @@ func (v *HWVersion) Version() string {
 // Section 4.2.5: [version: tstr]. The optional scheme is not supported.
 type hwVersionValue struct {
 	_       struct{} `cbor:"_,array"`
-	Version string
+	Version string   // hardware revision string
 }

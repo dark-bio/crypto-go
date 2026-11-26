@@ -19,9 +19,8 @@ import (
 	"github.com/dark-bio/crypto-go/internal/jsonext"
 )
 
-// Tests that a raw byte encoded RSA private key can be decoded and re-encoded
-// to the same bytes. The purpose is not to battle-test the implementation,
-// rather to ensure that the code implements the format other subsystems expect.
+// TestSecretKeyBytesCodec checks that a raw byte-encoded RSA private key
+// decodes and re-encodes to the same bytes.
 func TestSecretKeyBytesCodec(t *testing.T) {
 	// Generated with:
 	//   openssl genrsa -out test.key 2048
@@ -66,9 +65,8 @@ func TestSecretKeyBytesCodec(t *testing.T) {
 	}
 }
 
-// Tests that a raw byte encoded RSA private key is rejected if its primes
-// repeat, as it would fail to encode as DER, or if its private exponent is not
-// below the modulus.
+// TestSecretKeyBytesMalformed checks that raw RSA private keys with repeated
+// primes or an oversized private exponent are rejected.
 func TestSecretKeyBytesMalformed(t *testing.T) {
 	// A key with p = q = 2^1024 - 1 and d = 65537^-1 mod (p - 1)
 	repeatedPrime := strings.Repeat("ff", 128)
@@ -137,9 +135,8 @@ func TestSecretKeyEvenModulus(t *testing.T) {
 	}
 }
 
-// Tests that a raw byte encoded RSA public key can be decoded and re-encoded
-// to the same bytes. The purpose is not to battle-test the implementation,
-// rather to ensure that the code implements the format other subsystems expect.
+// TestPublicKeyBytesCodec checks that a raw byte-encoded RSA public key
+// decodes and re-encodes to the same bytes.
 func TestPublicKeyBytesCodec(t *testing.T) {
 	// Generated with:
 	//   openssl genrsa -out test.key 2048
@@ -172,10 +169,8 @@ func TestPublicKeyBytesCodec(t *testing.T) {
 	}
 }
 
-// Tests that a PEM encoded RSA private key can be decoded and re-encoded to
-// the same string. The purpose is not to battle-test the PEM implementation,
-// rather to ensure that the code implements the PEM format other subsystems
-// expect.
+// TestSecretKeyPEMCodec checks that a PEM-encoded RSA private key decodes and
+// re-encodes to the same PEM string.
 func TestSecretKeyPEMCodec(t *testing.T) {
 	// Generated with:
 	//   openssl genrsa -out test.key 2048
@@ -217,10 +212,8 @@ JJXbL24vf1AajzeJk6CpdQ==
 	}
 }
 
-// Tests that a PEM encoded RSA public key can be decoded and re-encoded to
-// the same string. The purpose is not to battle-test the PEM implementation,
-// rather to ensure that the code implements the PEM format other subsystems
-// expect.
+// TestPublicKeyPEMCodec checks that a PEM-encoded RSA public key decodes and
+// re-encodes to the same PEM string.
 func TestPublicKeyPEMCodec(t *testing.T) {
 	// Generated with:
 	//   openssl rsa -in test.key -pubout -out test.pub
@@ -243,10 +236,8 @@ fQIDAQAB
 	}
 }
 
-// Tests that a DER encoded RSA private key can be decoded and re-encoded to
-// the same string. The purpose is not to battle-test the DER implementation,
-// rather to ensure that the code implements the DER format other subsystems
-// expect.
+// TestSecretKeyDERCodec checks that a DER-encoded RSA private key decodes and
+// re-encodes to the same DER bytes.
 func TestSecretKeyDERCodec(t *testing.T) {
 	// Generated with:
 	//   openssl rsa -in test.key -outform DER -out test.key.der
@@ -303,8 +294,8 @@ func TestSecretKeyDERCodec(t *testing.T) {
 	}
 }
 
-// Tests that a DER encoded RSA private key is rejected unless both its primes
-// are 1024 bits, as the raw encoding could not hold it otherwise.
+// TestSecretKeyDERMalformed checks that a DER-encoded RSA private key is
+// rejected unless both primes are 1024 bits.
 func TestSecretKeyDERMalformed(t *testing.T) {
 	// A 1025-bit and a 1023-bit prime spanning a 2048-bit modulus
 	largePrime := "" +
@@ -351,10 +342,8 @@ func TestSecretKeyDERMalformed(t *testing.T) {
 	}
 }
 
-// Tests that a DER encoded RSA public key can be decoded and re-encoded to
-// the same string. The purpose is not to battle-test the DER implementation,
-// rather to ensure that the code implements the DER format other subsystems
-// expect.
+// TestPublicKeyDERCodec checks that a DER-encoded RSA public key decodes and
+// re-encodes to the same DER bytes.
 func TestPublicKeyDERCodec(t *testing.T) {
 	// Generated with:
 	//   openssl rsa -in test.key -pubout -outform DER -out test.pub.der
@@ -380,9 +369,8 @@ func TestPublicKeyDERCodec(t *testing.T) {
 	}
 }
 
-// Tests that the implemented fingerprint algorithm produces the expected
-// checksum. The purpose is not to battle-test the implementation, rather
-// to ensure that the code implements the format other subsystems expect.
+// TestFingerprint checks that the fingerprint matches the SHA-256 hash of the
+// little-endian modulus and exponent.
 func TestFingerprint(t *testing.T) {
 	// Generated with:
 	//   from Cryptodome.PublicKey import RSA
@@ -412,11 +400,7 @@ fQIDAQAB
 	}
 }
 
-// Tests signing and verifying messages. Note, this test is not meant to test
-// cryptography, it is mostly an API sanity check to verify that everything
-// seems to work.
-//
-// TODO(karalabe): Get some live test vectors for a bit more sanity
+// TestSignVerify checks basic RSA signing and verification behavior.
 func TestSignVerify(t *testing.T) {
 	secret := GenerateKey()
 	public := secret.PublicKey()
@@ -431,9 +415,9 @@ func TestSignVerify(t *testing.T) {
 	}
 }
 
-// Tests that the text-encoded types marshal to the same JSON strings by value
-// and by pointer, round-trip through them, and reject null unless the target
-// is a pointer.
+// TestJSON checks that the text-encoded types marshal to the same JSON strings
+// by value and by pointer, round-trip cleanly, and reject null unless the
+// target is a pointer.
 func TestJSON(t *testing.T) {
 	secret := GenerateKey()
 	signature, err := secret.Sign([]byte("message"))

@@ -74,11 +74,11 @@ type OEMBoot struct {
 type DebugState uint64
 
 const (
-	DebugEnabled                  DebugState = 0 // Debug is currently enabled
-	DebugDisabled                 DebugState = 1 // Debug is currently disabled
-	DebugDisabledSinceBoot        DebugState = 2 // Debug was disabled at boot and has not been enabled since
-	DebugDisabledPermanently      DebugState = 3 // Debug is disabled since boot, only the manufacturer may re-enable it
-	DebugDisabledFullyPermanently DebugState = 4 // All debug is permanently disabled, the manufacturer's included
+	DebugEnabled                  DebugState = 0 // debug is currently enabled
+	DebugDisabled                 DebugState = 1 // debug is currently disabled
+	DebugDisabledSinceBoot        DebugState = 2 // disabled at boot and not enabled since
+	DebugDisabledPermanently      DebugState = 3 // disabled since boot, only manufacturer may re-enable
+	DebugDisabledFullyPermanently DebugState = 4 // permanently disabled, including for the manufacturer
 )
 
 // MarshalCBOR implements cbor.Marshaler.
@@ -135,11 +135,11 @@ type SWName struct {
 type Use uint64
 
 const (
-	UseGeneric           Use = 1 // General-purpose attestation
-	UseRegistration      Use = 2 // Attestation for service registration
-	UseProvisioning      Use = 3 // Attestation prior to key/config provisioning
-	UseCertIssuance      Use = 4 // Attestation for certificate signing requests
-	UseProofOfPossession Use = 5 // Attestation accompanying a proof-of-possession
+	UseGeneric           Use = 1 // general-purpose attestation
+	UseRegistration      Use = 2 // attestation for service registration
+	UseProvisioning      Use = 3 // attestation prior to key or config provisioning
+	UseCertIssuance      Use = 4 // attestation for certificate signing requests
+	UseProofOfPossession Use = 5 // attestation accompanying proof of possession
 )
 
 // MarshalCBOR implements cbor.Marshaler.

@@ -69,8 +69,8 @@ var (
 
 	// ErrMalformedKey is returned by the fallible key constructors when a key
 	// encoding cannot be parsed or its contents are unusable. Causes include
-	// invalid component keys or sizes, unexpected algorithm parameters or an
-	// unsupported PKCS#8 version. The wrapping error names the problem.
+	// invalid component keys or sizes, unexpected algorithm parameters, or an
+	// unsupported PKCS#8 version. The wrapping error states the problem.
 	ErrMalformedKey = errors.New("xdsa: malformed key")
 
 	// ErrTrailingData is returned by the DER parsers, and through them by the
@@ -79,7 +79,7 @@ var (
 
 	// ErrInvalidSignature is returned by PublicKey.Verify when the signature
 	// does not verify under the key for the message. Either half failing
-	// produces it, and the halves are not told apart.
+	// produces it without distinguishing which half failed.
 	ErrInvalidSignature = errors.New("xdsa: signature verification failed")
 )
 
@@ -89,8 +89,8 @@ var OID = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 6, 48}
 // SecretKey contains a composite ML-DSA-65 + Ed25519 private key for creating
 // quantum-resistant digital signatures.
 type SecretKey struct {
-	mlKey *mldsa.SecretKey
-	edKey *eddsa.SecretKey
+	mlKey *mldsa.SecretKey // ML-DSA-65 signing component
+	edKey *eddsa.SecretKey // Ed25519 signing component
 }
 
 // GenerateKey creates a new, random private key.
@@ -235,8 +235,8 @@ func (k *SecretKey) Fingerprint() Fingerprint {
 	return k.PublicKey().Fingerprint()
 }
 
-// Sign creates a digital signature of the message. This call will never return
-// an error, the type is there for composability.
+// Sign creates a composite digital signature of the message. It never returns
+// an error; the error return is present for Signer interface composability.
 func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 	// Compute the M' that will be signed by the two keys
 	mPrime := cmldsaMessagePrime(message)
@@ -244,13 +244,13 @@ func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 	// Sign M' with both algorithms
 	mlSig, err := k.mlKey.Sign(mPrime, []byte(signatureDomain))
 	if err != nil {
-		panic(err) // Signing with keys never fails
+		panic(err) // signing with local keys never fails
 	}
 	edSig, err := k.edKey.Sign(mPrime)
 	if err != nil {
-		panic(err) // Signing with keys never fails
+		panic(err) // signing with local keys never fails
 	}
-	// Concatenate: ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
+	// Concatenate ML-DSA-65 (3309 bytes) and Ed25519 (64 bytes)
 	var sig Signature
 	copy(sig[:3309], mlSig[:])
 	copy(sig[3309:], edSig[:])
@@ -258,18 +258,18 @@ func (k *SecretKey) Sign(message []byte) (*Signature, error) {
 }
 
 // SplitSign creates a composite signature from separate ML-DSA-65 and Ed25519
-// signers instead of a composite secret key, so the two halves can be held
+// signers instead of a composite secret key, so the two halves can be kept
 // apart, such as one in hardware and one in software.
 //
 // Both halves sign the composite message M' derived from the raw message
 // according to the IETF composite signature spec:
 //
 //	M' = Prefix || Label || len(ctx) || ctx || PH(M)
-//	  where ctx is empty and PH is SHA512.
+//	  where ctx is empty and PH is SHA-512.
 //
 // The ML-DSA signer also receives the label "COMPSIG-MLDSA65-Ed25519-SHA512"
 // as its own context, separate from the empty ctx above. An error from either
-// signer is returned as is.
+// signer is returned unchanged.
 func SplitSign(mlKey mldsa.Signer, edKey eddsa.Signer, message []byte) (*Signature, error) {
 	// Compute the M' that will be signed by the two keys
 	mPrime := cmldsaMessagePrime(message)
@@ -283,7 +283,7 @@ func SplitSign(mlKey mldsa.Signer, edKey eddsa.Signer, message []byte) (*Signatu
 	if err != nil {
 		return nil, err
 	}
-	// Concatenate: ML-DSA-65 (3309 bytes) || Ed25519 (64 bytes)
+	// Concatenate ML-DSA-65 (3309 bytes) and Ed25519 (64 bytes)
 	var sig Signature
 	copy(sig[:3309], mlSig[:])
 	copy(sig[3309:], edSig[:])
@@ -291,15 +291,15 @@ func SplitSign(mlKey mldsa.Signer, edKey eddsa.Signer, message []byte) (*Signatu
 }
 
 // PublicKey is an ML-DSA-65 public key paired with an Ed25519 public key for
-// verifying quantum resistant digital signatures.
+// verifying quantum-resistant digital signatures.
 //
 // The zero value is not a valid key, and using it panics. JSON decoding rejects
-// null, but a field missing from the input keeps the zero value without an
+// null, while a field missing from the input keeps the zero value without
 // error. To detect a missing key, decode into a *PublicKey field and check it
 // for nil.
 type PublicKey struct {
-	mlKey *mldsa.PublicKey
-	edKey *eddsa.PublicKey
+	mlKey *mldsa.PublicKey // ML-DSA-65 verification component
+	edKey *eddsa.PublicKey // Ed25519 verification component
 }
 
 // ComposePublicKey creates a public key from its constituent ML-DSA-65 and
@@ -597,10 +597,7 @@ type Signer interface {
 // according to the IETF composite signature spec:
 //
 //	M' = Prefix || Label || len(ctx) || ctx || PH(M)
-//	  where ctx is empty and PH is SHA512.
-//
-// Use this when signing separately with individual ML-DSA and Ed25519 keys
-// before composing the signatures.
+//	  where ctx is empty and PH is SHA-512.
 func cmldsaMessagePrime(message []byte) []byte {
 	prehash := sha512.Sum512(message)
 
